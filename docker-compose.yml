@@ -11,7 +11,7 @@ services:
     container_name: tesla-streamer
     restart: unless-stopped
     ports:
-      - "8080:8080"       # change left side if 8080 is taken on your host
+      - "33333:8080"
     environment:
       PORT:          8080
       MJPEG_FPS:     24
