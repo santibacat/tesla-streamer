@@ -34,7 +34,7 @@ FFMPEG_QUALITY= int(os.environ.get("FFMPEG_QUALITY", "3"))   # 1=best, 31=worst
 STREAM_WIDTH  = int(os.environ.get("STREAM_WIDTH", "1920"))
 STREAM_HEIGHT = int(os.environ.get("STREAM_HEIGHT", "1080"))
 MAX_STREAMS   = int(os.environ.get("MAX_STREAMS", "3"))       # concurrent stream slots
-AUDIO_DELAY_MS= int(os.environ.get("AUDIO_DELAY_MS", "3000")) # server-side delay before audio starts, to let video pipeline catch up
+AUDIO_DELAY_MS= int(os.environ.get("AUDIO_DELAY_MS", "0"))   # ms to delay video start after audio, to keep streams in sync
 
 
 # ── Per-stream state ──────────────────────────────────────────────────────────
@@ -387,13 +387,13 @@ STATUS_HTML = """<!DOCTYPE html>
       </select>
       <select id="yt-sync"
               style="background:#0d0d14;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:10px 12px;font-family:monospace;">
-        <option value="0">Video delay: 0 s</option>
+        <option value="0" selected>Video delay: 0 s (default)</option>
+        <option value="500">Video delay: 0.5 s</option>
         <option value="1000">Video delay: 1 s</option>
+        <option value="1500">Video delay: 1.5 s</option>
         <option value="2000">Video delay: 2 s</option>
-        <option value="3000" selected>Video delay: 3 s (default)</option>
-        <option value="4000">Video delay: 4 s</option>
-        <option value="5000">Video delay: 5 s</option>
-        <option value="6000">Video delay: 6 s</option>
+        <option value="2500">Video delay: 2.5 s</option>
+        <option value="3000">Video delay: 3 s</option>
       </select>
       <button id="go-stream"
               style="background:var(--red);color:white;border:0;border-radius:6px;padding:10px 16px;font-family:'Orbitron',monospace;letter-spacing:.08em;cursor:pointer;">
