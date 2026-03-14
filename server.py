@@ -34,7 +34,7 @@ FFMPEG_QUALITY= int(os.environ.get("FFMPEG_QUALITY", "3"))   # 1=best, 31=worst
 STREAM_WIDTH  = int(os.environ.get("STREAM_WIDTH", "1920"))
 STREAM_HEIGHT = int(os.environ.get("STREAM_HEIGHT", "1080"))
 MAX_STREAMS   = int(os.environ.get("MAX_STREAMS", "3"))       # concurrent stream slots
-AUDIO_DELAY_MS= int(os.environ.get("AUDIO_DELAY_MS", "1200")) # startup sync offset
+AUDIO_DELAY_MS= int(os.environ.get("AUDIO_DELAY_MS", "3000")) # server-side delay before audio starts, to let video pipeline catch up
 
 
 # ── Per-stream state ──────────────────────────────────────────────────────────
@@ -387,12 +387,13 @@ STATUS_HTML = """<!DOCTYPE html>
       </select>
       <select id="yt-sync"
               style="background:#0d0d14;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:10px 12px;font-family:monospace;">
-        <option value="0">Audio delay: 0 ms</option>
-        <option value="400">Audio delay: 400 ms</option>
-        <option value="800">Audio delay: 800 ms</option>
-        <option value="1200" selected>Audio delay: 1200 ms</option>
-        <option value="1600">Audio delay: 1600 ms</option>
-        <option value="2000">Audio delay: 2000 ms</option>
+        <option value="0">Video delay: 0 s</option>
+        <option value="1000">Video delay: 1 s</option>
+        <option value="2000">Video delay: 2 s</option>
+        <option value="3000" selected>Video delay: 3 s (default)</option>
+        <option value="4000">Video delay: 4 s</option>
+        <option value="5000">Video delay: 5 s</option>
+        <option value="6000">Video delay: 6 s</option>
       </select>
       <button id="go-stream"
               style="background:var(--red);color:white;border:0;border-radius:6px;padding:10px 16px;font-family:'Orbitron',monospace;letter-spacing:.08em;cursor:pointer;">
@@ -406,7 +407,7 @@ STATUS_HTML = """<!DOCTYPE html>
   <h2>Usage</h2>
   <div class="usage">
     GET /watch<span>?url=</span>https://youtube.com/watch?v=VIDEO_ID<br>
-    GET /watch<span>?url=</span>https://youtube.com/watch?v=VIDEO_ID<span>&amp;quality=720&amp;sync=1200</span><br>
+    GET /watch<span>?url=</span>https://youtube.com/watch?v=VIDEO_ID<span>&amp;quality=720&amp;sync=4000</span><br>
     GET /health   → JSON health check<br>
     GET /status   → JSON active streams
   </div>
@@ -424,7 +425,7 @@ STATUS_HTML = """<!DOCTYPE html>
     <div class="env-item">Quality <b>{{quality}}</b></div>
     <div class="env-item">Resolution <b>{{width}}×{{height}}</b></div>
     <div class="env-item">Max streams <b>{{max_streams}}</b></div>
-    <div class="env-item">Audio delay <b>{{audio_delay_ms}} ms</b></div>
+    <div class="env-item">Audio start delay <b>{{audio_delay_ms}} ms</b></div>
   </div>
 </div>
 
@@ -503,27 +504,21 @@ WATCH_HTML = """<!DOCTYPE html>
   }
   var q = "?sid=" + encodeURIComponent(sid) + "&sync=" + encodeURIComponent(syncMs);
   var img = document.getElementById("mjpeg");
-  var diag = document.getElementById("diag");
-  img.src = "/stream" + q;
   var audio = document.getElementById("audio");
-  var audioStarted = false;
+  var diag = document.getElementById("diag");
 
-  function startAudio() {
-    if (audioStarted) return;
-    audioStarted = true;
-    audio.src = "/audio" + q;
-    try {
-      var playPromise = audio.play();
-      if (playPromise && typeof playPromise.catch === "function") {
-        playPromise.catch(function () {});
-      }
-    } catch (err) {
-      // Ignore autoplay errors; controls stay available for manual play.
-    }
-  }
+  // Start audio first so its pipeline is already running and buffered.
+  audio.src = "/audio?sid=" + encodeURIComponent(sid);
+  try {
+    var p = audio.play();
+    if (p && typeof p.catch === "function") p.catch(function () {});
+  } catch (e) {}
 
-  img.addEventListener("load", startAudio);
-  setTimeout(startAudio, 3000);
+  // Start video after sync_ms so audio has a head start equal to the video
+  // pipeline's startup lag, keeping them in sync when the first frame appears.
+  setTimeout(function () {
+    img.src = "/stream" + q;
+  }, parseInt(syncMs, 10) || 0);
 
   function showDiag(message) {
     diag.style.display = "block";
@@ -628,8 +623,8 @@ class Handler(BaseHTTPRequestHandler):
             sync_ms = int(raw_sync)
         except ValueError:
             raise ValueError("sync must be an integer milliseconds value")
-        if sync_ms < 0 or sync_ms > 5000:
-            raise ValueError("sync must be between 0 and 5000 milliseconds")
+        if sync_ms < 0 or sync_ms > 10000:
+            raise ValueError("sync must be between 0 and 10000 milliseconds")
         return sync_ms
 
     def do_GET(self):
@@ -803,55 +798,42 @@ class Handler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             log.info(f"[{stream.id}] Client disconnected: {self.client_address[0]}")
 
+    @staticmethod
+    def _launch_audio_pipeline(url: str, seek_s: float):
+        """Spawn yt-dlp | ffmpeg for audio starting at seek_s seconds."""
+        yt_cmd = [
+            "yt-dlp",
+            "--no-playlist",
+            "-f", "bestaudio[ext=m4a]/bestaudio",
+            "-o", "-",
+            "--quiet",
+            url,
+        ]
+        ff_cmd = [
+            "ffmpeg",
+            "-loglevel", "error",
+            "-ss", f"{seek_s:.3f}",
+            "-i", "pipe:0",
+            "-vn",
+            "-af", "aresample=async=1:first_pts=0",
+            "-c:a", "mp3",
+            "-b:a", "128k",
+            "-f", "mp3",
+            "pipe:1",
+        ]
+        yt_proc = subprocess.Popen(yt_cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        ff_proc = subprocess.Popen(ff_cmd, stdin=yt_proc.stdout,
+                                   stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        return yt_proc, ff_proc
+
     def _serve_audio(self, stream: Stream, sync_ms: int = AUDIO_DELAY_MS):
         yt_proc = None
         ff_proc = None
         try:
-            # Wait briefly for video pipeline start so audio aligns to the same
-            # stream session timeline instead of starting independently.
-            wait_deadline = time.time() + 5
-            while stream.started_at is None and stream.status == "starting" and time.time() < wait_deadline:
-                time.sleep(0.05)
-
-            if stream.started_at is not None:
-                target = stream.started_at + (sync_ms / 1000.0)
-                delay = target - time.time()
-                if delay > 0:
-                    time.sleep(delay)
-
-            yt_cmd = [
-                "yt-dlp",
-                "--no-playlist",
-                "-f", "bestaudio[ext=m4a]/bestaudio",
-                "-o", "-",
-                "--quiet",
-                stream.url,
-            ]
-            af_filter = "aresample=async=1:first_pts=0"
-            ff_cmd = [
-                "ffmpeg",
-                "-loglevel", "error",
-                "-re",
-                "-i", "pipe:0",
-                "-vn",
-                "-af", af_filter,
-                "-c:a", "mp3",
-                "-b:a", "128k",
-                "-f", "mp3",
-                "pipe:1",
-            ]
-
-            yt_proc = subprocess.Popen(
-                yt_cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
-            )
-            ff_proc = subprocess.Popen(
-                ff_cmd,
-                stdin=yt_proc.stdout,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
-            )
+            # Audio starts from content position 0. The browser delays the
+            # /audio request by sync_ms so video gets a head start.
+            log.info(f"[{stream.id}] Audio starting")
+            yt_proc, ff_proc = self._launch_audio_pipeline(stream.url, seek_s=0.0)
 
             self.send_response(200)
             self.send_header("Content-Type", "audio/mpeg")
