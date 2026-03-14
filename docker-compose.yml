@@ -1,0 +1,49 @@
+services:
+
+  # ── Core streamer ─────────────────────────────────────────────────────────
+  streamer:
+    build:
+      context: .
+      args:
+        PYTHON_IMAGE: ${PYTHON_IMAGE:-python:3.12-slim}
+    image: tesla-streamer:latest
+    pull_policy: never
+    container_name: tesla-streamer
+    restart: unless-stopped
+    ports:
+      - "8080:8080"       # change left side if 8080 is taken on your host
+    environment:
+      PORT:          8080
+      MJPEG_FPS:     24
+      FFMPEG_QUALITY: 3   # 1=best quality, 31=smallest file
+      STREAM_WIDTH:  1920
+      STREAM_HEIGHT: 1080
+      MAX_STREAMS:   3    # max parallel videos
+    # Optional: keep yt-dlp cookies for age-restricted videos
+    # volumes:
+    #   - ./cookies.txt:/app/cookies.txt:ro
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
+      interval: 30s
+      timeout:  5s
+      retries:  3
+
+
+  # ── Optional nginx reverse proxy (TLS termination, custom domain) ─────────
+  # Uncomment if you want nginx in front of the streamer.
+  # Point your DDNS domain at your server IP, then set SERVER_NAME below.
+  #
+  # nginx:
+  #   image: nginx:alpine
+  #   container_name: tesla-nginx
+  #   restart: unless-stopped
+  #   depends_on:
+  #     - streamer
+  #   ports:
+  #     - "80:80"
+  #     - "443:443"
+  #   volumes:
+  #     - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+  #     - ./certs:/etc/nginx/certs:ro   # put your TLS certs here
+  #   environment:
+  #     SERVER_NAME: stream.yourdomain.com
