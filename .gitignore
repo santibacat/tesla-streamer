@@ -6,3 +6,4 @@ subscriptions.json
 tmp/
 temp/
 *.log
+local-media/

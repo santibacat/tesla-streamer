@@ -65,6 +65,10 @@ PLUTO_REGION_MAP    = _parse_lang_map(os.environ.get("PLUTO_REGION_MAP", "es:ES,
 # Optional language -> X-Forwarded-For IP used for boot/channels requests.
 # This helps force region-specific lineups when server IP geo differs.
 PLUTO_XFF_MAP       = _parse_lang_map(os.environ.get("PLUTO_XFF_MAP", "en:8.8.8.8"))
+LOCAL_MEDIA_DIR     = os.environ.get("LOCAL_MEDIA_DIR", "/media/videos")
+LOCAL_MEDIA_EXTS    = {
+    ".mp4", ".mkv", ".webm", ".avi", ".mov", ".m4v", ".mpg", ".mpeg", ".ts",
+}
 
 
 # ── Per-stream state ──────────────────────────────────────────────────────────
@@ -409,14 +413,33 @@ def _is_direct_hls(url: str) -> bool:
     return path.endswith(".m3u8") or path.endswith(".m3u")
 
 
+def _is_local_media_url(url: str) -> bool:
+    """True for local file URLs served by the Local Media tab."""
+    return url.startswith("file://")
+
+
 def _is_acestream(url: str) -> bool:
     """True for acestream-http-proxy URLs (MPEG-TS over HTTP)."""
     return "/ace/getstream" in url or "/ace/manifest.m3u8" in url
 
 
+def _is_pluto_stream(url: str) -> bool:
+    """True for Pluto TV stitched stream URLs."""
+    from urllib.parse import urlparse
+    return "pluto.tv" in (urlparse(url).netloc or "").lower()
+
+
 def _is_direct_stream(url: str) -> bool:
     """True for any URL ffmpeg can consume directly without yt-dlp."""
-    return _is_direct_hls(url) or _is_acestream(url)
+    return _is_direct_hls(url) or _is_acestream(url) or _is_local_media_url(url)
+
+
+def _ffmpeg_input_target(url: str) -> str:
+    """Return ffmpeg-safe input target from stream url."""
+    if _is_local_media_url(url):
+        parsed = urlparse(url)
+        return unquote(parsed.path or "")
+    return url
 
 
 _BROWSER_UA = (
@@ -429,6 +452,8 @@ _BROWSER_UA = (
 def _direct_input_args(url: str) -> list[str]:
     """ffmpeg input flags for a direct stream URL."""
     from urllib.parse import urlparse, parse_qs
+    if _is_local_media_url(url):
+        return ["-re"]
     if _is_acestream(url):
         return ["-timeout", "10000000"]
     parsed = urlparse(url)
@@ -463,7 +488,7 @@ def _start_audio_buffer(stream: Stream):
         "ffmpeg",
         "-loglevel", "error",
         *_direct_input_args(stream.url),
-        "-i", stream.url,
+        "-i", _ffmpeg_input_target(stream.url),
         "-vn",
         "-af", "aresample=async=1:first_pts=0",
         "-c:a", "mp3",
@@ -498,9 +523,9 @@ def _start_audio_buffer(stream: Stream):
     threading.Thread(target=_drain, daemon=True).start()
 
 
-def _start_acestream_muxed_pipeline(stream: Stream):
+def _start_muxed_pipeline(stream: Stream):
     """
-    Start a single ffmpeg process for AceStream that outputs:
+    Start a single ffmpeg process for direct streams that outputs:
     - video MJPEG frames on stdout (pipe:1)
     - audio MP3 chunks on fd 3 (pipe:3)
     This avoids a second source connection for audio.
@@ -517,7 +542,7 @@ def _start_acestream_muxed_pipeline(stream: Stream):
         *_direct_input_args(stream.url),
         "-probesize", "20M",
         "-analyzeduration", "10M",
-        "-i", stream.url,
+        "-i", _ffmpeg_input_target(stream.url),
         # Video output (stdout / pipe:1)
         "-map", "0:v:0",
         "-vf", vf,
@@ -577,13 +602,14 @@ def _start_acestream_muxed_pipeline(stream: Stream):
 def _run_hls_pipeline(stream: Stream):
     """Pipeline for direct streams (HLS / MPEG-TS / Acestream) — no yt-dlp."""
     is_ace = _is_acestream(stream.url)
-    log.info(f"[{stream.id}] Direct pipeline (ace={is_ace})")
+    is_pluto = _is_pluto_stream(stream.url)
+    log.info(f"[{stream.id}] Direct pipeline (ace={is_ace}, pluto={is_pluto})")
 
     SOI = b"\xff\xd8"
     EOI = b"\xff\xd9"
     try:
-        if is_ace:
-            ff_proc = _start_acestream_muxed_pipeline(stream)
+        if is_ace or is_pluto:
+            ff_proc = _start_muxed_pipeline(stream)
         else:
             # HLS path still uses a dedicated audio process.
             _start_audio_buffer(stream)
@@ -591,7 +617,7 @@ def _run_hls_pipeline(stream: Stream):
                 "ffmpeg",
                 "-loglevel", "error",
                 *_direct_input_args(stream.url),
-                "-i", stream.url,
+                "-i", _ffmpeg_input_target(stream.url),
                 "-vf", (
                     f"scale={STREAM_WIDTH}:{STREAM_HEIGHT}"
                     f":force_original_aspect_ratio=decrease,"
@@ -900,6 +926,7 @@ STATUS_HTML = """<!DOCTYPE html>
   <button class="tab-btn" data-tab="twitch">Twitch</button>
   <button class="tab-btn" data-tab="pluto">Pluto TV</button>
   <button class="tab-btn" data-tab="ace">Acestream</button>
+  <button class="tab-btn" data-tab="local">Local Media</button>
   <button class="tab-btn" data-tab="info">Info</button>
 </div>
 
@@ -1122,6 +1149,36 @@ STATUS_HTML = """<!DOCTYPE html>
 </div>
 
 <!-- ── Info tab ── -->
+<div class="tab-panel" id="tab-local">
+  <div class="card">
+    <h2>Playback options</h2>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
+      <select id="local-sync">
+        <option value="0" selected>Delay: 0 s</option>
+        <option value="500">Delay: 0.5 s</option>
+        <option value="1000">Delay: 1 s</option>
+        <option value="1500">Delay: 1.5 s</option>
+        <option value="2000">Delay: 2 s</option>
+        <option value="2500">Delay: 2.5 s</option>
+        <option value="3000">Delay: 3 s</option>
+      </select>
+      <button id="local-refresh"
+              style="background:var(--red);color:white;border:0;border-radius:6px;padding:8px 14px;font-family:'Orbitron',monospace;font-size:.7rem;letter-spacing:.08em;cursor:pointer;">
+        REFRESH LIST
+      </button>
+    </div>
+    <p style="font-size:.82rem;color:var(--muted);margin-top:12px;">
+      Folder: <code style="color:var(--text);">{{local_media_dir}}</code>
+    </p>
+  </div>
+  <div class="card">
+    <h2>Video files</h2>
+    <div class="feed-status" id="local-status">Open this tab to load local videos.</div>
+    <div id="local-list"></div>
+  </div>
+</div>
+
+<!-- ── Info tab ── -->
 <div class="tab-panel" id="tab-info">
   <div class="card">
     <h2>API usage</h2>
@@ -1131,6 +1188,8 @@ STATUS_HTML = """<!DOCTYPE html>
       GET /watch<span>?url=</span>https://x.com/user/status/ID<br>
       GET /watch<span>?url=</span>https://…<span>&amp;quality=720&amp;sync=1000</span><br>
       GET /feed<span>?channel=</span>@handle<span>&amp;limit=12</span>  → JSON video list<br>
+      GET /local_media  → JSON local video list<br>
+      GET /local_watch<span>?file=</span>relative/path.mp4<span>&amp;sync=1000</span><br>
       GET /subscriptions  → JSON channel list<br>
       GET /health   → JSON health check<br>
       GET /status   → JSON active streams
@@ -1675,6 +1734,63 @@ STATUS_HTML = """<!DOCTYPE html>
   });
 
   renderSaved();
+
+  // ── Local Media tab ──
+  var localSync    = document.getElementById("local-sync");
+  var localRefresh = document.getElementById("local-refresh");
+  var localStatus  = document.getElementById("local-status");
+  var localList    = document.getElementById("local-list");
+  localSync.value  = "{{audio_delay_ms}}";
+
+  function renderLocalFiles(files) {
+    localList.innerHTML = "";
+    if (!files.length) {
+      localList.innerHTML = '<p class="empty">No video files found in configured folder.</p>';
+      return;
+    }
+    files.forEach(function (item) {
+      var row = document.createElement("div");
+      row.className = "stream-row";
+      row.style.cursor = "pointer";
+      row.innerHTML =
+        '<span style="font-size:.95rem;">' + escHtml(item.name || item.path) + '</span>' +
+        '<span style="font-family:monospace;font-size:.75rem;color:var(--muted);">OPEN \u2192</span>';
+      row.addEventListener("click", function () {
+        window.location.href =
+          "/local_watch?file=" + encodeURIComponent(item.path) +
+          "&sync=" + encodeURIComponent(localSync.value);
+      });
+      localList.appendChild(row);
+    });
+  }
+
+  function loadLocalFiles() {
+    localStatus.textContent = "Loading local files…";
+    localList.innerHTML = "";
+    var xhr = new XMLHttpRequest();
+    xhr.open("GET", "/local_media", true);
+    xhr.timeout = 10000;
+    xhr.onreadystatechange = function () {
+      if (xhr.readyState !== 4) return;
+      var data;
+      try { data = JSON.parse(xhr.responseText); } catch (e) {
+        localStatus.textContent = "Failed to parse response."; return;
+      }
+      if (data.error) { localStatus.textContent = "Error: " + data.error; return; }
+      var files = data.files || [];
+      localStatus.textContent = files.length + " local videos";
+      renderLocalFiles(files);
+    };
+    xhr.send();
+  }
+
+  localRefresh.addEventListener("click", loadLocalFiles);
+  var localOpened = false;
+  document.querySelector('[data-tab="local"]').addEventListener("click", function () {
+    if (localOpened) return;
+    localOpened = true;
+    loadLocalFiles();
+  });
 })();
 </script>
 </body></html>"""
@@ -1820,7 +1936,8 @@ def render_status_page() -> str:
             .replace("{{audio_delay_ms}}", str(AUDIO_DELAY_MS))
             .replace("{{subs_status}}", subs_status)
             .replace("{{pluto_langs}}", ", ".join(PLUTO_LANGS))
-            .replace("{{pluto_langs_json}}", json.dumps(PLUTO_LANGS)))
+            .replace("{{pluto_langs_json}}", json.dumps(PLUTO_LANGS))
+            .replace("{{local_media_dir}}", LOCAL_MEDIA_DIR))
 
 def render_watch_page(stream_id: str, sync_ms: int) -> str:
     return (WATCH_HTML
@@ -1864,6 +1981,24 @@ class Handler(BaseHTTPRequestHandler):
             raise ValueError("sync must be between 0 and 10000 milliseconds")
         return sync_ms
 
+    @staticmethod
+    def _resolve_local_media_path(rel_path: str | None) -> tuple[str | None, str]:
+        if not rel_path:
+            return None, "Missing ?file= parameter"
+        # Keep path traversal protections (`..`) while allowing symlink targets
+        # outside the base directory when they are reachable via entries inside
+        # the mounted media tree.
+        base = os.path.abspath(LOCAL_MEDIA_DIR)
+        target = os.path.abspath(os.path.normpath(os.path.join(base, rel_path)))
+        if not (target == base or target.startswith(base + os.sep)):
+            return None, "Invalid local media path"
+        if not os.path.isfile(target):
+            return None, "Local media file not found"
+        ext = os.path.splitext(target)[1].lower()
+        if ext not in LOCAL_MEDIA_EXTS:
+            return None, "Unsupported local media extension"
+        return target, ""
+
     def do_GET(self):
         parsed = urlparse(self.path)
         qs     = parse_qs(parsed.query)
@@ -1896,6 +2031,30 @@ class Handler(BaseHTTPRequestHandler):
 
         elif path == "/subscriptions":
             self._serve_subscriptions()
+
+        elif path == "/local_media":
+            self._serve_local_media()
+
+        elif path == "/local_watch":
+            raw_file = qs.get("file", [None])[0]
+            raw_sync = qs.get("sync", [None])[0]
+            try:
+                sync_ms = self._parse_sync_ms(raw_sync)
+            except ValueError as e:
+                self._error(400, str(e))
+                return
+            local_file, err = self._resolve_local_media_path(raw_file)
+            if not local_file:
+                self._error(400, err)
+                return
+            file_url = "file://" + quote(local_file, safe="/")
+            registry.cleanup_done()
+            stream = registry.get_or_create(
+                file_url,
+                quality=None,
+                reuse_existing=False,
+            )
+            self._html(render_watch_page(stream.id, sync_ms))
 
         elif path == "/pluto_channels":
             lang = qs.get("lang", [PLUTO_LANGS[0]])[0]
@@ -2041,6 +2200,30 @@ class Handler(BaseHTTPRequestHandler):
             "synced_at": data.get("synced_at", ""),
             "channels":  data.get("channels", []),
         })
+
+    def _serve_local_media(self):
+        base = os.path.abspath(LOCAL_MEDIA_DIR)
+        if not os.path.isdir(base):
+            self._error(503, f"Local media directory not found: {base}")
+            return
+        files = []
+        try:
+            for root, _, names in os.walk(base, followlinks=True):
+                for name in names:
+                    ext = os.path.splitext(name)[1].lower()
+                    if ext not in LOCAL_MEDIA_EXTS:
+                        continue
+                    full = os.path.join(root, name)
+                    rel = os.path.relpath(full, base)
+                    files.append({
+                        "name": name,
+                        "path": rel,
+                    })
+        except Exception as e:
+            self._error(500, f"Failed to scan local media folder: {e}")
+            return
+        files.sort(key=lambda x: x["path"].lower())
+        self._json({"base_dir": base, "files": files})
 
     # ── Pluto TV channels ─────────────────────────────────────────────────────
     def _serve_pluto_channels(self, lang: str):

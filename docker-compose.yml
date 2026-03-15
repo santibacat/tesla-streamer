@@ -20,12 +20,14 @@ services:
       STREAM_HEIGHT: 1080
       MAX_STREAMS:   3    # max parallel videos
       PLUTO_LANGS:   es,en  # comma-separated Pluto TV regions: es, en, de, fr, it, …
+      LOCAL_MEDIA_DIR: /media/videos
       # SUBSCRIPTIONS_FILE: /subscriptions.json  # path inside container (default)
     # Generate subscriptions.json at home with:
     #   uv run sync_subscriptions.py --cookies cookies.txt
     # Then mount it here so the streamer can read it without needing cookies.
     volumes:
       - ./subscriptions.json:/subscriptions.json:ro
+      - ./local-media:/media/videos:ro
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
       interval: 30s

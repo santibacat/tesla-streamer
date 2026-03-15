@@ -199,9 +199,38 @@ sudo cp /etc/letsencrypt/live/stream.yourdomain.com/privkey.pem   certs/key.pem
 | `STREAM_HEIGHT`       | 1080                  | Output height (px)                      |
 | `MAX_STREAMS`         | 3                     | Max parallel video streams              |
 | `AUDIO_DELAY_MS`      | 0                     | ms to delay video start after audio     |
+| `LOCAL_MEDIA_DIR`     | /media/videos         | Local Media folder path inside container |
 | `SUBSCRIPTIONS_FILE`  | /subscriptions.json   | Path to subscriptions JSON inside container |
 
 Override in `docker-compose.yml` under `environment:`.
+
+---
+
+## Local Media in Docker
+
+The **Local Media** tab reads files from inside the container, not directly from
+your host filesystem. Use a bind mount:
+
+```yaml
+environment:
+  LOCAL_MEDIA_DIR: /media/videos
+volumes:
+  - ./local-media:/media/videos:ro
+```
+
+Then put your videos on the host in `./local-media` (next to `docker-compose.yml`),
+or change the left side to any host path, for example:
+
+```yaml
+volumes:
+  - /home/username/oocal-media:/media/videos:ro
+```
+
+After changing mounts/env:
+
+```bash
+docker compose up -d
+```
 
 ---
 
