@@ -7,6 +7,7 @@ Usage:
   http://yourserver/health       → health check
 """
 
+import re
 import subprocess
 import threading
 import time
@@ -474,9 +475,30 @@ def _is_pluto_stream(url: str) -> bool:
     return "pluto.tv" in (urlparse(url).netloc or "").lower()
 
 
+def _is_rtp_stream(url: str) -> bool:
+    """True for RTP/UDP multicast streams that ffmpeg can consume directly."""
+    return url.startswith(("rtp://", "udp://", "rtsp://", "srt://"))
+
+
+_PRIVATE_IP_RE = re.compile(
+    r"^https?://"
+    r"(?:127\.\d+\.\d+\.\d+|"
+    r"10\.\d+\.\d+\.\d+|"
+    r"172\.(?:1[6-9]|2\d|3[01])\.\d+\.\d+|"
+    r"192\.168\.\d+\.\d+|"
+    r"localhost)"
+    r"(?::\d+)?/"
+)
+
+def _is_local_network_stream(url: str) -> bool:
+    """True for HTTP streams served from private/local IPs (e.g. IPTV middleware)."""
+    return bool(_PRIVATE_IP_RE.match(url))
+
+
 def _is_direct_stream(url: str) -> bool:
     """True for any URL ffmpeg can consume directly without yt-dlp."""
-    return _is_direct_hls(url) or _is_acestream(url) or _is_local_media_url(url)
+    return (_is_direct_hls(url) or _is_acestream(url) or _is_local_media_url(url)
+            or _is_rtp_stream(url) or _is_local_network_stream(url))
 
 
 def _ffmpeg_input_target(url: str) -> str:
@@ -599,6 +621,8 @@ def _direct_input_args(url: str) -> list[str]:
         return ["-re"]
     if _is_acestream(url):
         return ["-timeout", "10000000"]
+    if _is_rtp_stream(url):
+        return ["-rtbufsize", "100M"]
     parsed = urlparse(url)
     host = parsed.netloc.lower()
     headers = ""
@@ -621,7 +645,9 @@ def _direct_input_args(url: str) -> list[str]:
     args = ["-user_agent", _BROWSER_UA]
     if headers:
         args += ["-headers", headers]
-    args.append("-re")
+    # Don't use -re for Pluto live HLS: let ffmpeg buffer ahead for smoother output.
+    if "pluto.tv" not in host:
+        args.append("-re")
     return args
 
 
@@ -758,14 +784,16 @@ def _run_hls_pipeline(stream: Stream):
     is_ace = _is_acestream(stream.url)
     is_pluto = _is_pluto_stream(stream.url)
     is_local = _is_local_media_url(stream.url)
+    is_rtp = _is_rtp_stream(stream.url)
+    is_lan = _is_local_network_stream(stream.url)
     log.info(
-        f"[{stream.id}] Direct pipeline (ace={is_ace}, pluto={is_pluto}, local={is_local})"
+        f"[{stream.id}] Direct pipeline (ace={is_ace}, pluto={is_pluto}, local={is_local}, rtp={is_rtp}, lan={is_lan})"
     )
 
     SOI = b"\xff\xd8"
     EOI = b"\xff\xd9"
     try:
-        if is_ace or is_pluto or is_local:
+        if is_ace or is_pluto or is_local or is_rtp or is_lan:
             ff_proc = _start_muxed_pipeline(stream)
         else:
             # HLS path still uses a dedicated audio process.
