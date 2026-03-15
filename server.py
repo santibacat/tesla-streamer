@@ -59,7 +59,7 @@ AUDIO_DELAY_MS= int(os.environ.get("AUDIO_DELAY_MS", "0"))   # ms to delay video
 LOCAL_MEDIA_VIDEO_DELAY_MS = int(
     os.environ.get("LOCAL_MEDIA_VIDEO_DELAY_MS", "1500")
 )
-SUBSCRIPTIONS_FILE  = os.environ.get("SUBSCRIPTIONS_FILE", "/subscriptions.json")
+SUBSCRIPTIONS_FILE  = os.environ.get("SUBSCRIPTIONS_FILE", "/config/subscriptions.json")
 ACE_STREAMS_FILE    = os.environ.get("ACE_STREAMS_FILE", "/config/ace_streams.json")
 # Comma-separated list of Pluto TV language codes to load, e.g. "es,en"
 PLUTO_LANGS         = [l.strip() for l in os.environ.get("PLUTO_LANGS", "es,en").split(",") if l.strip()]
