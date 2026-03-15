@@ -1047,6 +1047,8 @@ STATUS_HTML = """<!DOCTYPE html>
       <input id="yt-id" type="text" placeholder="URL or YouTube video ID">
       <div id="yt-quality-btns" style="display:flex;gap:6px;flex-wrap:wrap;"></div>
       <div id="yt-sync-btns" style="display:flex;gap:6px;flex-wrap:wrap;"></div>
+    </div>
+    <div style="margin-top:10px;">
       <button id="go-stream"
               style="background:var(--red);color:white;border:0;border-radius:6px;padding:10px 16px;font-family:'Orbitron',monospace;letter-spacing:.08em;cursor:pointer;">
         OPEN STREAM
@@ -1105,6 +1107,9 @@ STATUS_HTML = """<!DOCTYPE html>
     </div>
     <div class="feed-status" id="feed-status"></div>
     <div class="feed-grid" id="feed-grid"></div>
+    <div style="text-align:center;margin-top:14px;display:none;" id="feed-more-wrap">
+      <button id="feed-more" style="background:transparent;color:var(--muted);border:1px solid var(--border);border-radius:6px;padding:8px 20px;font-family:'Orbitron',monospace;font-size:.7rem;letter-spacing:.08em;cursor:pointer;">LOAD MORE</button>
+    </div>
   </div>
 </div>
 
@@ -1132,6 +1137,9 @@ STATUS_HTML = """<!DOCTYPE html>
     </div>
     <div class="feed-status" id="twitch-vod-status"></div>
     <div class="feed-grid" id="twitch-vod-grid"></div>
+    <div style="text-align:center;margin-top:14px;display:none;" id="twitch-vod-more-wrap">
+      <button id="twitch-vod-more" style="background:transparent;color:var(--muted);border:1px solid var(--border);border-radius:6px;padding:8px 20px;font-family:'Orbitron',monospace;font-size:.7rem;letter-spacing:.08em;cursor:pointer;">LOAD MORE</button>
+    </div>
   </div>
 </div>
 
@@ -1193,7 +1201,7 @@ STATUS_HTML = """<!DOCTYPE html>
 <div class="tab-panel" id="tab-ace">
   <div class="card">
     <h2>Playback options</h2>
-    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
+    <div style="display:flex;flex-direction:column;gap:8px;">
       <div id="ace-quality-btns" style="display:flex;gap:6px;flex-wrap:wrap;"></div>
       <div id="ace-sync-btns" style="display:flex;gap:6px;flex-wrap:wrap;"></div>
     </div>
@@ -1417,14 +1425,22 @@ STATUS_HTML = """<!DOCTYPE html>
     if ((e.key || "") === "Enter" || e.keyCode === 13) twitchLiveGo.click();
   });
 
-  twitchVodGo.addEventListener("click", function () {
+  var twitchVodMoreWrap = document.getElementById("twitch-vod-more-wrap");
+  var twitchVodMoreBtn  = document.getElementById("twitch-vod-more");
+  var twitchVodLimit    = 12;
+
+  function loadTwitchVods(append) {
     var ch = (twitchVodCh.value || "").trim().replace(/^@/, "");
     if (!ch) { twitchVodCh.focus(); return; }
+    if (!append) {
+      twitchVodLimit = 12;
+      twitchVodGrid.innerHTML = "";
+      twitchVodMoreWrap.style.display = "none";
+    }
     twitchVodSt.textContent = "Loading VODs…";
-    twitchVodGrid.innerHTML = "";
     var url = "https://www.twitch.tv/" + ch + "/videos";
     var xhr = new XMLHttpRequest();
-    xhr.open("GET", "/feed?channel=" + encodeURIComponent(url) + "&limit=12", true);
+    xhr.open("GET", "/feed?channel=" + encodeURIComponent(url) + "&limit=" + twitchVodLimit, true);
     xhr.timeout = 30000;
     xhr.onreadystatechange = function () {
       if (xhr.readyState !== 4) return;
@@ -1434,8 +1450,11 @@ STATUS_HTML = """<!DOCTYPE html>
       }
       if (data.error) { twitchVodSt.textContent = "Error: " + data.error; return; }
       var videos = data.videos || [];
-      if (!videos.length) { twitchVodSt.textContent = "No VODs found."; return; }
-      twitchVodSt.textContent = videos.length + " VODs";
+      if (!videos.length) { twitchVodSt.textContent = "No VODs found."; twitchVodMoreWrap.style.display = "none"; return; }
+      if (append) {
+        var existing = twitchVodGrid.querySelectorAll(".feed-card").length;
+        videos = videos.slice(existing);
+      }
       videos.forEach(function (v) {
         var card = document.createElement("div");
         card.className = "feed-card";
@@ -1447,17 +1466,23 @@ STATUS_HTML = """<!DOCTYPE html>
           (dur ? '<div class="feed-dur">' + escHtml(dur) + '</div>' : '') +
           '</div>';
         card.addEventListener("click", function () {
-          window.location.href = buildWatchUrl(
-            v.url, twitchQuality.value, twitchSync.value
-          );
+          window.location.href = buildWatchUrl(v.url, twitchQuality.value, twitchSync.value);
         });
         twitchVodGrid.appendChild(card);
       });
+      twitchVodSt.textContent = twitchVodGrid.querySelectorAll(".feed-card").length + " VODs";
+      twitchVodMoreWrap.style.display = "block";
     };
     xhr.send();
+  }
+
+  twitchVodGo.addEventListener("click", function () { loadTwitchVods(false); });
+  twitchVodMoreBtn.addEventListener("click", function () {
+    twitchVodLimit += 12;
+    loadTwitchVods(true);
   });
   twitchVodCh.addEventListener("keydown", function (e) {
-    if ((e.key || "") === "Enter" || e.keyCode === 13) twitchVodGo.click();
+    if ((e.key || "") === "Enter" || e.keyCode === 13) loadTwitchVods(false);
   });
 
   // ── Pluto TV tab ──
@@ -1904,13 +1929,39 @@ STATUS_HTML = """<!DOCTYPE html>
 
   function pad(n) { return n < 10 ? "0" + n : "" + n; }
 
-  function loadFeed() {
+  var feedMoreWrap = document.getElementById("feed-more-wrap");
+  var feedMoreBtn  = document.getElementById("feed-more");
+  var feedLimit    = 12;
+
+  function appendFeedCards(videos) {
+    videos.forEach(function (v) {
+      var card = document.createElement("div");
+      card.className = "feed-card";
+      var dur = fmtDuration(v.duration);
+      card.innerHTML =
+        '<img class="feed-thumb" src="' + (v.thumb || "") + '" loading="lazy" alt="">' +
+        '<div class="feed-info">' +
+        '<div class="feed-title">' + escHtml(v.title) + '</div>' +
+        (dur ? '<div class="feed-dur">' + escHtml(dur) + '</div>' : '') +
+        '</div>';
+      card.addEventListener("click", function () {
+        window.location.href = buildWatchUrl(v.url, feedQuality.value, feedSync.value);
+      });
+      feedGrid.appendChild(card);
+    });
+  }
+
+  function loadFeed(append) {
     var ch = (feedChannel.value || "").trim();
     if (!ch) { feedChannel.focus(); return; }
+    if (!append) {
+      feedLimit = 12;
+      feedGrid.innerHTML = "";
+      feedMoreWrap.style.display = "none";
+    }
     feedStatus.textContent = "Loading…";
-    feedGrid.innerHTML = "";
     var xhr = new XMLHttpRequest();
-    xhr.open("GET", "/feed?channel=" + encodeURIComponent(ch) + "&limit=12", true);
+    xhr.open("GET", "/feed?channel=" + encodeURIComponent(ch) + "&limit=" + feedLimit, true);
     xhr.timeout = 30000;
     xhr.onreadystatechange = function () {
       if (xhr.readyState !== 4) return;
@@ -1930,28 +1981,25 @@ STATUS_HTML = """<!DOCTYPE html>
       var videos = data.videos || [];
       if (!videos.length) {
         feedStatus.textContent = "No videos found for that channel.";
+        feedMoreWrap.style.display = "none";
         return;
       }
-      feedStatus.textContent = videos.length + " recent videos";
-      feedGrid.innerHTML = "";
-      videos.forEach(function (v) {
-        var card = document.createElement("div");
-        card.className = "feed-card";
-        var dur = fmtDuration(v.duration);
-        card.innerHTML =
-          '<img class="feed-thumb" src="' + (v.thumb || "") + '" loading="lazy" alt="">' +
-          '<div class="feed-info">' +
-          '<div class="feed-title">' + escHtml(v.title) + '</div>' +
-          (dur ? '<div class="feed-dur">' + escHtml(dur) + '</div>' : '') +
-          '</div>';
-        card.addEventListener("click", function () {
-          window.location.href = buildWatchUrl(v.url, feedQuality.value, feedSync.value);
-        });
-        feedGrid.appendChild(card);
-      });
+      if (append) {
+        var existing = feedGrid.querySelectorAll(".feed-card").length;
+        appendFeedCards(videos.slice(existing));
+      } else {
+        appendFeedCards(videos);
+      }
+      feedStatus.textContent = feedGrid.querySelectorAll(".feed-card").length + " videos";
+      feedMoreWrap.style.display = "block";
     };
     xhr.send();
   }
+
+  feedMoreBtn.addEventListener("click", function () {
+    feedLimit += 12;
+    loadFeed(true);
+  });
 
   function escHtml(s) {
     return (s || "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
@@ -2097,11 +2145,10 @@ STATUS_HTML = """<!DOCTYPE html>
     { value: "0", label: "0s" },
     { value: "500", label: "0.5s" },
     { value: "1000", label: "1s" },
-    { value: "1500", label: "1.5s" },
     { value: "2000", label: "2s" },
     { value: "2500", label: "2.5s" },
     { value: "3000", label: "3s" }
-  ], "{{local_media_video_delay_ms}}");
+  ], "1500");
 
   function renderLocalFiles(files) {
     localList.innerHTML = "";
