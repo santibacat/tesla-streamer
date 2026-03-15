@@ -198,14 +198,32 @@ Override in `docker-compose.yml` under `environment:`.
 
 ---
 
+## Supported sources
+
+Any URL that yt-dlp supports works in the Stream tab or `/watch?url=`:
+
+| Source        | Example URL |
+|---------------|-------------|
+| YouTube       | `https://www.youtube.com/watch?v=VIDEO_ID` |
+| Twitch live   | `https://www.twitch.tv/channelname` |
+| Twitch VOD    | `https://www.twitch.tv/videos/VOD_ID` |
+| X / Twitter   | `https://x.com/user/status/TWEET_ID` |
+| Pluto TV      | Built-in channel list in the Pluto TV tab (US, no account) |
+
+For Twitch and YouTube VODs, use the **Twitch** and **YouTube** tabs respectively
+to browse and pick a stream. For X/Twitter, paste the tweet URL directly in the
+Stream tab.
+
+---
+
 ## API endpoints
 
 | Endpoint                        | Description                                      |
 |---------------------------------|--------------------------------------------------|
-| `GET /`                         | Status dashboard with stream/feed/info tabs      |
+| `GET /`                         | Status dashboard (Stream / YouTube / Twitch / Pluto TV / Info tabs) |
 | `GET /watch?url=…`              | Watch page (MJPEG video + audio)                 |
-| `GET /feed?channel=@handle`     | JSON list of recent uploads for a channel        |
-| `GET /subscriptions`            | JSON list of channels from subscriptions.json    |
+| `GET /feed?channel=URL&limit=N` | JSON list of recent uploads for a channel/user   |
+| `GET /subscriptions`            | JSON channel list from subscriptions.json        |
 | `GET /health`                   | `{"ok":true}` — for uptime monitors              |
 | `GET /status`                   | JSON list of active streams                      |
 

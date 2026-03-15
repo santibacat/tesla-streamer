@@ -349,7 +349,7 @@ STATUS_HTML = """<!DOCTYPE html>
   h1{font-family:'Orbitron',monospace;font-weight:900;font-size:2rem;color:var(--red);letter-spacing:.12em;text-shadow:0 0 24px rgba(227,25,55,.45);margin-bottom:6px;}
   .sub{color:var(--muted);font-size:.9rem;letter-spacing:.08em;text-transform:uppercase;margin-bottom:28px;}
   .tabs{display:flex;gap:6px;margin-bottom:20px;width:100%;max-width:760px;}
-  .tab-btn{font-family:'Orbitron',monospace;font-size:.75rem;letter-spacing:.1em;padding:8px 20px;border-radius:6px;border:1px solid var(--border);background:transparent;color:var(--muted);cursor:pointer;transition:all .15s;}
+  .tab-btn{font-family:'Orbitron',monospace;font-size:.7rem;letter-spacing:.08em;padding:8px 14px;border-radius:6px;border:1px solid var(--border);background:transparent;color:var(--muted);cursor:pointer;transition:all .15s;}
   .tab-btn.active{background:var(--red);color:#fff;border-color:var(--red);}
   .tab-panel{display:none;width:100%;max-width:760px;}
   .tab-panel.active{display:block;}
@@ -392,7 +392,9 @@ STATUS_HTML = """<!DOCTYPE html>
 
 <div class="tabs">
   <button class="tab-btn active" data-tab="stream">Stream</button>
-  <button class="tab-btn" data-tab="feed">Channel Feed</button>
+  <button class="tab-btn" data-tab="feed">YouTube</button>
+  <button class="tab-btn" data-tab="twitch">Twitch</button>
+  <button class="tab-btn" data-tab="pluto">Pluto TV</button>
   <button class="tab-btn" data-tab="info">Info</button>
 </div>
 
@@ -400,8 +402,11 @@ STATUS_HTML = """<!DOCTYPE html>
 <div class="tab-panel active" id="tab-stream">
   <div class="card">
     <h2>Start stream</h2>
+    <p style="font-size:.85rem;color:var(--muted);margin-bottom:12px;">
+      Paste any YouTube, Twitch, or X/Twitter video URL — or a YouTube video ID.
+    </p>
     <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
-      <input id="yt-id" type="text" placeholder="YouTube video ID (e.g. dQw4w9WgXcQ)">
+      <input id="yt-id" type="text" placeholder="URL or YouTube video ID">
       <select id="yt-quality">
         <option value="">Auto quality</option>
         <option value="1080">1080p</option>
@@ -495,15 +500,80 @@ STATUS_HTML = """<!DOCTYPE html>
   </div>
 </div>
 
+<!-- ── Twitch tab ── -->
+<div class="tab-panel" id="tab-twitch">
+  <div class="card">
+    <h2>Playback options</h2>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
+      <select id="twitch-quality">
+        <option value="">Auto quality</option>
+        <option value="1080">1080p</option>
+        <option value="720">720p</option>
+        <option value="480">480p</option>
+        <option value="360">360p</option>
+        <option value="240">240p</option>
+      </select>
+      <select id="twitch-sync">
+        <option value="0" selected>Delay: 0 s</option>
+        <option value="500">Delay: 0.5 s</option>
+        <option value="1000">Delay: 1 s</option>
+        <option value="1500">Delay: 1.5 s</option>
+        <option value="2000">Delay: 2 s</option>
+      </select>
+    </div>
+  </div>
+  <div class="card">
+    <h2>Live stream</h2>
+    <div class="feed-controls">
+      <input id="twitch-live-channel" type="text" placeholder="channel name (e.g. xqc)">
+      <button id="twitch-live-go">WATCH LIVE</button>
+    </div>
+  </div>
+  <div class="card">
+    <h2>VODs</h2>
+    <div class="feed-controls">
+      <input id="twitch-vod-channel" type="text" placeholder="channel name">
+      <button id="twitch-vod-go">LOAD VODS</button>
+    </div>
+    <div class="feed-status" id="twitch-vod-status"></div>
+    <div class="feed-grid" id="twitch-vod-grid"></div>
+  </div>
+</div>
+
+<!-- ── Pluto TV tab ── -->
+<div class="tab-panel" id="tab-pluto">
+  <div class="card">
+    <h2>Playback options</h2>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
+      <select id="pluto-sync">
+        <option value="0" selected>Delay: 0 s</option>
+        <option value="500">Delay: 0.5 s</option>
+        <option value="1000">Delay: 1 s</option>
+        <option value="1500">Delay: 1.5 s</option>
+        <option value="2000">Delay: 2 s</option>
+      </select>
+      <input id="pluto-filter" type="text" placeholder="Filter channels…"
+             style="flex:1;min-width:180px;background:#0d0d14;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px 12px;font-family:monospace;">
+    </div>
+  </div>
+  <div class="card">
+    <h2>Channels</h2>
+    <div class="feed-status" id="pluto-status"></div>
+    <div id="pluto-list"></div>
+  </div>
+</div>
+
 <!-- ── Info tab ── -->
 <div class="tab-panel" id="tab-info">
   <div class="card">
     <h2>API usage</h2>
     <div class="usage">
       GET /watch<span>?url=</span>https://youtube.com/watch?v=VIDEO_ID<br>
-      GET /watch<span>?url=</span>https://youtube.com/watch?v=VIDEO_ID<span>&amp;quality=720&amp;sync=4000</span><br>
+      GET /watch<span>?url=</span>https://www.twitch.tv/CHANNEL<br>
+      GET /watch<span>?url=</span>https://x.com/user/status/ID<br>
+      GET /watch<span>?url=</span>https://…<span>&amp;quality=720&amp;sync=1000</span><br>
       GET /feed<span>?channel=</span>@handle<span>&amp;limit=12</span>  → JSON video list<br>
-      GET /subscriptions  → JSON channel list (requires cookies.txt)<br>
+      GET /subscriptions  → JSON channel list<br>
       GET /health   → JSON health check<br>
       GET /status   → JSON active streams
     </div>
@@ -526,11 +596,11 @@ STATUS_HTML = """<!DOCTYPE html>
   });
 
   // ── Stream tab ──
-  var idInput     = document.getElementById("yt-id");
-  var qualitySel  = document.getElementById("yt-quality");
-  var syncSel     = document.getElementById("yt-sync");
-  var goButton    = document.getElementById("go-stream");
-  syncSel.value   = "{{audio_delay_ms}}";
+  var idInput    = document.getElementById("yt-id");
+  var qualitySel = document.getElementById("yt-quality");
+  var syncSel    = document.getElementById("yt-sync");
+  var goButton   = document.getElementById("go-stream");
+  syncSel.value  = "{{audio_delay_ms}}";
 
   function buildWatchUrl(videoUrl, quality, sync) {
     var target = "/watch?url=" + encodeURIComponent(videoUrl);
@@ -539,16 +609,158 @@ STATUS_HTML = """<!DOCTYPE html>
     return target;
   }
 
+  function resolveInputUrl(raw) {
+    // Full URL (YouTube, Twitch, X/Twitter, etc.) — pass through
+    if (/^https?:\/\//i.test(raw)) return raw;
+    // Bare YouTube video ID (11 alphanum chars)
+    if (/^[A-Za-z0-9_-]{11}$/.test(raw)) {
+      return "https://www.youtube.com/watch?v=" + raw;
+    }
+    // Twitch channel shorthand: twitch:channel
+    if (/^twitch:/i.test(raw)) {
+      return "https://www.twitch.tv/" + raw.slice(7);
+    }
+    // Fallback: treat as YouTube ID anyway
+    return "https://www.youtube.com/watch?v=" + raw;
+  }
+
   function openStream() {
-    var id = (idInput.value || "").trim();
-    if (!id) { idInput.focus(); return; }
-    var url = "https://www.youtube.com/watch?v=" + encodeURIComponent(id);
-    window.location.href = buildWatchUrl(url, qualitySel.value, syncSel.value);
+    var raw = (idInput.value || "").trim();
+    if (!raw) { idInput.focus(); return; }
+    window.location.href = buildWatchUrl(
+      resolveInputUrl(raw), qualitySel.value, syncSel.value
+    );
   }
 
   goButton.addEventListener("click", openStream);
   idInput.addEventListener("keydown", function (e) {
     if ((e.key || "") === "Enter" || e.keyCode === 13) openStream();
+  });
+
+  // ── Twitch tab ──
+  var twitchQuality  = document.getElementById("twitch-quality");
+  var twitchSync     = document.getElementById("twitch-sync");
+  var twitchLiveCh   = document.getElementById("twitch-live-channel");
+  var twitchLiveGo   = document.getElementById("twitch-live-go");
+  var twitchVodCh    = document.getElementById("twitch-vod-channel");
+  var twitchVodGo    = document.getElementById("twitch-vod-go");
+  var twitchVodSt    = document.getElementById("twitch-vod-status");
+  var twitchVodGrid  = document.getElementById("twitch-vod-grid");
+  twitchSync.value   = "{{audio_delay_ms}}";
+
+  twitchLiveGo.addEventListener("click", function () {
+    var ch = (twitchLiveCh.value || "").trim().replace(/^@/, "");
+    if (!ch) { twitchLiveCh.focus(); return; }
+    var url = "https://www.twitch.tv/" + ch;
+    window.location.href = buildWatchUrl(url, twitchQuality.value, twitchSync.value);
+  });
+  twitchLiveCh.addEventListener("keydown", function (e) {
+    if ((e.key || "") === "Enter" || e.keyCode === 13) twitchLiveGo.click();
+  });
+
+  twitchVodGo.addEventListener("click", function () {
+    var ch = (twitchVodCh.value || "").trim().replace(/^@/, "");
+    if (!ch) { twitchVodCh.focus(); return; }
+    twitchVodSt.textContent = "Loading VODs…";
+    twitchVodGrid.innerHTML = "";
+    var url = "https://www.twitch.tv/" + ch + "/videos";
+    var xhr = new XMLHttpRequest();
+    xhr.open("GET", "/feed?channel=" + encodeURIComponent(url) + "&limit=12", true);
+    xhr.timeout = 30000;
+    xhr.onreadystatechange = function () {
+      if (xhr.readyState !== 4) return;
+      var data;
+      try { data = JSON.parse(xhr.responseText); } catch (e) {
+        twitchVodSt.textContent = "Failed to parse response."; return;
+      }
+      if (data.error) { twitchVodSt.textContent = "Error: " + data.error; return; }
+      var videos = data.videos || [];
+      if (!videos.length) { twitchVodSt.textContent = "No VODs found."; return; }
+      twitchVodSt.textContent = videos.length + " VODs";
+      videos.forEach(function (v) {
+        var card = document.createElement("div");
+        card.className = "feed-card";
+        var dur = fmtDuration(v.duration);
+        card.innerHTML =
+          '<img class="feed-thumb" src="' + (v.thumb || "") + '" loading="lazy" alt="">' +
+          '<div class="feed-info">' +
+          '<div class="feed-title">' + escHtml(v.title) + '</div>' +
+          (dur ? '<div class="feed-dur">' + escHtml(dur) + '</div>' : '') +
+          '</div>';
+        card.addEventListener("click", function () {
+          window.location.href = buildWatchUrl(
+            v.url, twitchQuality.value, twitchSync.value
+          );
+        });
+        twitchVodGrid.appendChild(card);
+      });
+    };
+    xhr.send();
+  });
+  twitchVodCh.addEventListener("keydown", function (e) {
+    if ((e.key || "") === "Enter" || e.keyCode === 13) twitchVodGo.click();
+  });
+
+  // ── Pluto TV tab ──
+  var plutoSync   = document.getElementById("pluto-sync");
+  var plutoFilter = document.getElementById("pluto-filter");
+  var plutoStatus = document.getElementById("pluto-status");
+  var plutoList   = document.getElementById("pluto-list");
+  plutoSync.value = "{{audio_delay_ms}}";
+
+  // Public Pluto TV HLS streams (US, no account required)
+  var PLUTO_CHANNELS = [
+    {name:"CNN",             url:"https://service-stitcher.clusters.pluto.tv/v2/stitch/embed/channel/5e3c73cd2e5d2a0007c14f8d/master.m3u8?deviceId=teslastreamer&deviceType=web&sid=teslastreamer"},
+    {name:"Fox News",        url:"https://service-stitcher.clusters.pluto.tv/v2/stitch/embed/channel/5e3c73cd2e5d2a0007c14f90/master.m3u8?deviceId=teslastreamer&deviceType=web&sid=teslastreamer"},
+    {name:"MSNBC",           url:"https://service-stitcher.clusters.pluto.tv/v2/stitch/embed/channel/636418f0d8e6060007750ef7/master.m3u8?deviceId=teslastreamer&deviceType=web&sid=teslastreamer"},
+    {name:"Bloomberg",       url:"https://service-stitcher.clusters.pluto.tv/v2/stitch/embed/channel/5cf29ac6197def0009486a49/master.m3u8?deviceId=teslastreamer&deviceType=web&sid=teslastreamer"},
+    {name:"Sky News",        url:"https://service-stitcher.clusters.pluto.tv/v2/stitch/embed/channel/5e3ce9e5e0878800079e1ac2/master.m3u8?deviceId=teslastreamer&deviceType=web&sid=teslastreamer"},
+    {name:"Action Movies",   url:"https://service-stitcher.clusters.pluto.tv/v2/stitch/embed/channel/5a3f57b5b191be29e00e8718/master.m3u8?deviceId=teslastreamer&deviceType=web&sid=teslastreamer"},
+    {name:"Comedy Central",  url:"https://service-stitcher.clusters.pluto.tv/v2/stitch/embed/channel/5a3f5a234a494a7d1ac51fee/master.m3u8?deviceId=teslastreamer&deviceType=web&sid=teslastreamer"},
+    {name:"Star Trek",       url:"https://service-stitcher.clusters.pluto.tv/v2/stitch/embed/channel/5a3f5a9e4a494a7d1ac52155/master.m3u8?deviceId=teslastreamer&deviceType=web&sid=teslastreamer"},
+    {name:"Crime Drama",     url:"https://service-stitcher.clusters.pluto.tv/v2/stitch/embed/channel/5a3f58eab1974eca3aeb93e5/master.m3u8?deviceId=teslastreamer&deviceType=web&sid=teslastreamer"},
+    {name:"Paranormal",      url:"https://service-stitcher.clusters.pluto.tv/v2/stitch/embed/channel/5a3f58634a494a7d1ac51e86/master.m3u8?deviceId=teslastreamer&deviceType=web&sid=teslastreamer"},
+    {name:"Drama Movies",    url:"https://service-stitcher.clusters.pluto.tv/v2/stitch/embed/channel/5a3f5a154a494a7d1ac51fe3/master.m3u8?deviceId=teslastreamer&deviceType=web&sid=teslastreamer"},
+    {name:"Horror",          url:"https://service-stitcher.clusters.pluto.tv/v2/stitch/embed/channel/5a3f58d6b1974eca3aeb939f/master.m3u8?deviceId=teslastreamer&deviceType=web&sid=teslastreamer"},
+    {name:"Science Fiction", url:"https://service-stitcher.clusters.pluto.tv/v2/stitch/embed/channel/5a3f59834a494a7d1ac51ef4/master.m3u8?deviceId=teslastreamer&deviceType=web&sid=teslastreamer"},
+    {name:"Anime",           url:"https://service-stitcher.clusters.pluto.tv/v2/stitch/embed/channel/5a3f5a8a4a494a7d1ac52148/master.m3u8?deviceId=teslastreamer&deviceType=web&sid=teslastreamer"},
+    {name:"Classic TV",      url:"https://service-stitcher.clusters.pluto.tv/v2/stitch/embed/channel/5a3f57b5b191be29e00e874e/master.m3u8?deviceId=teslastreamer&deviceType=web&sid=teslastreamer"},
+    {name:"Sports",          url:"https://service-stitcher.clusters.pluto.tv/v2/stitch/embed/channel/5a3f5a364a494a7d1ac51ff9/master.m3u8?deviceId=teslastreamer&deviceType=web&sid=teslastreamer"},
+    {name:"Latino Mix",      url:"https://service-stitcher.clusters.pluto.tv/v2/stitch/embed/channel/5cb5bace98e48e0009ae7bb7/master.m3u8?deviceId=teslastreamer&deviceType=web&sid=teslastreamer"},
+    {name:"Music Videos",    url:"https://service-stitcher.clusters.pluto.tv/v2/stitch/embed/channel/5a3f5a524a494a7d1ac52017/master.m3u8?deviceId=teslastreamer&deviceType=web&sid=teslastreamer"},
+    {name:"Documentary",     url:"https://service-stitcher.clusters.pluto.tv/v2/stitch/embed/channel/5a3f59044a494a7d1ac51ec1/master.m3u8?deviceId=teslastreamer&deviceType=web&sid=teslastreamer"},
+    {name:"Nature",          url:"https://service-stitcher.clusters.pluto.tv/v2/stitch/embed/channel/5a3f59fa4a494a7d1ac51f32/master.m3u8?deviceId=teslastreamer&deviceType=web&sid=teslastreamer"},
+  ];
+
+  var filteredPluto = PLUTO_CHANNELS.slice();
+
+  function renderPluto(channels) {
+    plutoList.innerHTML = "";
+    channels.forEach(function (ch) {
+      var row = document.createElement("div");
+      row.className = "stream-row";
+      row.style.cursor = "pointer";
+      row.innerHTML =
+        '<span style="font-size:.95rem;">' + escHtml(ch.name) + '</span>' +
+        '<span style="font-family:monospace;font-size:.75rem;color:var(--muted);">LIVE →</span>';
+      row.addEventListener("click", function () {
+        window.location.href = buildWatchUrl(ch.url, "", plutoSync.value);
+      });
+      plutoList.appendChild(row);
+    });
+    plutoStatus.textContent = channels.length + " channels (US, no account required)";
+  }
+
+  renderPluto(PLUTO_CHANNELS);
+
+  plutoFilter.addEventListener("input", function () {
+    var q = (plutoFilter.value || "").toLowerCase().trim();
+    filteredPluto = q
+      ? PLUTO_CHANNELS.filter(function (c) {
+          return c.name.toLowerCase().indexOf(q) !== -1;
+        })
+      : PLUTO_CHANNELS.slice();
+    renderPluto(filteredPluto);
   });
 
   // ── Feed tab ──
