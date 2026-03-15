@@ -63,7 +63,7 @@ ACE_STREAMS_FILE    = os.environ.get("ACE_STREAMS_FILE", "/config/ace_streams.js
 # Comma-separated list of Pluto TV language codes to load, e.g. "es,en"
 PLUTO_LANGS         = [l.strip() for l in os.environ.get("PLUTO_LANGS", "es,en").split(",") if l.strip()]
 PLUTO_REFRESH_SECS  = int(os.environ.get("PLUTO_REFRESH_SECS", str(60 * 60)))  # 1 h
-PLUTO_APP_VERSION   = os.environ.get("PLUTO_APP_VERSION", "7")
+PLUTO_APP_VERSION   = os.environ.get("PLUTO_APP_VERSION", "8.0.0-111b2b9dc00bd0bea9030b30662159ed9e7c8bc6")
 # Maps UI language -> Pluto marketing region (country code).
 # Default keeps Spanish in ES and routes English to US lineup.
 PLUTO_REGION_MAP    = _parse_lang_map(os.environ.get("PLUTO_REGION_MAP", "es:ES,en:US"))
@@ -205,8 +205,8 @@ class PlutoCache:
         self._lock  = threading.Lock()
         self._by_lang: dict[str, list[dict]] = {}
         self._errors:  dict[str, str]        = {}
-        # { lang: (device_id, stitcher_params, refresh_at) }
-        self._sessions: dict[str, tuple[str, str, float]] = {}
+        # { lang: (device_id, session_token, stitcher_params, refresh_at) }
+        self._sessions: dict[str, tuple[str, str, str, float]] = {}
 
     def get(self, lang: str) -> tuple[list[dict], str]:
         with self._lock:
@@ -220,7 +220,7 @@ class PlutoCache:
             sess = self._sessions.get(lang)
         if not sess:
             return {"country": "", "refresh_at": 0, "region": region, "xff": xff}
-        _, stitcher_params, refresh_at = sess
+        _, _token, stitcher_params, refresh_at = sess
         country = ""
         for key, val in parse_qsl(stitcher_params, keep_blank_values=True):
             if key == "country":
@@ -245,15 +245,23 @@ class PlutoCache:
         return region, xff
 
     @staticmethod
-    def _apply_stitcher_params(hls_url: str, stitcher_params: str) -> str:
+    def _apply_stitcher_params(hls_url: str, stitcher_params: str, session_token: str = "") -> str:
         """Merge Pluto stitcher query params into the channel HLS URL."""
         from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
         parts = urlsplit(hls_url)
+        # Ensure /v2 prefix on path (Pluto requires /v2/stitch/hls/...)
+        path = parts.path
+        if path.startswith("/stitch/") and not path.startswith("/v2/"):
+            path = "/v2" + path
         merged = dict(parse_qsl(parts.query, keep_blank_values=True))
         for k, v in parse_qsl(stitcher_params, keep_blank_values=True):
             merged[k] = v
+        if session_token:
+            merged["jwt"] = session_token
+        merged["includeExtendedEvents"] = "true"
+        merged["masterJWTPassthrough"] = "true"
         query = urlencode(merged, doseq=True)
-        return urlunsplit((parts.scheme, parts.netloc, parts.path, query, ""))
+        return urlunsplit((parts.scheme, parts.netloc, path, query, ""))
 
     def build_channel_url(
         self, lang: str, channel_id: str, force_refresh: bool = False
@@ -278,43 +286,56 @@ class PlutoCache:
         if not sess:
             return None, f"Pluto TV [{lang}] session unavailable"
 
-        _, stitcher_params, _ = sess
+        _, session_token, stitcher_params, _ = sess
         hls_url = channel.get("hls_url", "")
         if not hls_url:
             return None, "channel has no HLS URL"
-        return self._apply_stitcher_params(hls_url, stitcher_params), ""
+        return self._apply_stitcher_params(hls_url, stitcher_params, session_token), ""
 
-    def _boot(self, lang: str) -> tuple[str, str, int] | None:
-        """Call Pluto boot API and return (device_id, stitcher_params, refresh_in_sec)."""
+    def _boot(self, lang: str) -> tuple[str, str, str, int] | None:
+        """Call Pluto boot API and return (device_id, session_token, stitcher_params, refresh_in_sec)."""
         import urllib.request, uuid
         region, xff = self._lang_context(lang)
         device_id = str(uuid.uuid4())
         url = (
             f"https://boot.pluto.tv/v4/start"
             f"?appName=web&appVersion={PLUTO_APP_VERSION}"
-            f"&deviceDNT=0&deviceId={device_id}&deviceMake=Chrome"
-            f"&deviceModel=web&deviceType=web&deviceVersion=unknown"
-            f"&clientModelNumber=na&serverSideAds=false"
+            f"&deviceDNT=0&deviceId={device_id}&deviceMake=chrome"
+            f"&deviceModel=web&deviceType=web&deviceVersion=122.0.0"
+            f"&clientModelNumber=1.0.0&serverSideAds=false"
+            f"&drmCapabilities=widevine%3AL3&blockingMode="
             f"&marketingRegion={region}&clientID={device_id}"
         )
         try:
-            headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
+            headers = {
+                "User-Agent": _BROWSER_UA,
+                "Accept": "application/json",
+                "Referer": "https://pluto.tv/",
+                "Origin": "https://pluto.tv",
+            }
             if xff:
                 headers["X-Forwarded-For"] = xff
             req = urllib.request.Request(
                 url, headers=headers
             )
             with urllib.request.urlopen(req, timeout=15) as resp:
-                data = json.loads(resp.read().decode())
+                raw = resp.read().decode()
+                data = json.loads(raw)
+        except urllib.error.HTTPError as e:
+            body = e.read().decode(errors="replace")
+            log.warning(f"Pluto TV [{lang}] boot HTTP {e.code}: {body[:500]}")
+            return None
         except Exception as e:
             log.warning(f"Pluto TV [{lang}] boot failed: {e}")
             return None
+        log.info(f"Pluto TV [{lang}] boot response keys: {list(data.keys())}")
+        session_token = data.get("sessionToken", "")
         params = data.get("stitcherParams", "")
         refresh = int(data.get("refreshInSec", 28800))
         if not params:
-            log.warning(f"Pluto TV [{lang}] boot returned no stitcherParams")
+            log.warning(f"Pluto TV [{lang}] boot returned no stitcherParams. Full response: {raw[:1000]}")
             return None
-        return device_id, params, refresh
+        return device_id, session_token, params, refresh
 
     def _fetch_lang(self, lang: str):
         import urllib.request
@@ -323,7 +344,7 @@ class PlutoCache:
             with self._lock:
                 self._errors[lang] = "boot API failed"
             return
-        device_id, stitcher_params, refresh_in = boot
+        device_id, session_token, stitcher_params, refresh_in = boot
 
         _, xff = self._lang_context(lang)
         api_url = (
@@ -332,19 +353,33 @@ class PlutoCache:
             f"&appName=web&appVersion={PLUTO_APP_VERSION}&clientTime=0"
         )
         try:
-            headers = {"User-Agent": "Mozilla/5.0"}
+            headers = {
+                "User-Agent": _BROWSER_UA,
+                "Referer": "https://pluto.tv/",
+                "Origin": "https://pluto.tv",
+            }
+            if session_token:
+                headers["Authorization"] = f"Bearer {session_token}"
             if xff:
                 headers["X-Forwarded-For"] = xff
             req = urllib.request.Request(
                 api_url, headers=headers
             )
             with urllib.request.urlopen(req, timeout=15) as resp:
-                raw = json.loads(resp.read().decode())
+                body = resp.read().decode()
+                raw = json.loads(body)
+        except urllib.error.HTTPError as e:
+            body = e.read().decode(errors="replace")
+            with self._lock:
+                self._errors[lang] = f"HTTP {e.code}"
+            log.warning(f"Pluto TV [{lang}] channels HTTP {e.code}: {body[:500]}")
+            return
         except Exception as e:
             with self._lock:
                 self._errors[lang] = str(e)
             log.warning(f"Pluto TV [{lang}] channels fetch failed: {e}")
             return
+        log.info(f"Pluto TV [{lang}] channels response: {len(raw) if isinstance(raw, list) else type(raw).__name__}")
 
         channels = []
         for ch in raw:
@@ -358,7 +393,7 @@ class PlutoCache:
             if not hls_url:
                 continue
             # Keep the original URL template and inject fresh stitcher params.
-            stitched_url = self._apply_stitcher_params(hls_url, stitcher_params)
+            stitched_url = self._apply_stitcher_params(hls_url, stitcher_params, session_token)
             channels.append({
                 "id":       ch.get("_id", ""),
                 "name":     ch.get("name", ""),
@@ -371,7 +406,7 @@ class PlutoCache:
         with self._lock:
             self._by_lang[lang] = channels
             self._errors.pop(lang, None)
-            self._sessions[lang] = (device_id, stitcher_params,
+            self._sessions[lang] = (device_id, session_token, stitcher_params,
                                     time.time() + refresh_in)
         meta = self.get_meta(lang)
         log.info(
@@ -390,7 +425,7 @@ class PlutoCache:
                 now = time.time()
                 for lang in PLUTO_LANGS:
                     with self._lock:
-                        _, _, refresh_at = self._sessions.get(lang, ("", "", 0))
+                        _, _, _, refresh_at = self._sessions.get(lang, ("", "", "", 0))
                     if now >= refresh_at:
                         self._fetch_lang(lang)
                 time.sleep(300)  # check every 5 min
@@ -808,7 +843,7 @@ def _run_hls_pipeline(stream: Stream):
 
 
 def run_pipeline(stream: Stream):
-    log.info(f"[{stream.id}] Starting pipeline for: {stream.url[:80]}")
+    log.info(f"[{stream.id}] Starting pipeline for: {stream.url}")
     threading.Thread(target=fetch_title, args=(stream,), daemon=True).start()
 
     if _is_direct_stream(stream.url):
