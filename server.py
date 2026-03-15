@@ -442,6 +442,17 @@ def _ffmpeg_input_target(url: str) -> str:
     return url
 
 
+def _has_supported_media_ext(path: str) -> bool:
+    """True when path or its symlink target has an allowed video extension."""
+    ext = os.path.splitext(path)[1].lower()
+    if ext in LOCAL_MEDIA_EXTS:
+        return True
+    if os.path.islink(path):
+        target_ext = os.path.splitext(os.path.realpath(path))[1].lower()
+        return target_ext in LOCAL_MEDIA_EXTS
+    return False
+
+
 _BROWSER_UA = (
     "Mozilla/5.0 (X11; Linux x86_64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -536,6 +547,23 @@ def _start_muxed_pipeline(stream: Stream):
         f"pad={STREAM_WIDTH}:{STREAM_HEIGHT}:(ow-iw)/2:(oh-ih)/2:black"
     )
     audio_r, audio_w = os.pipe()
+    audio_out = [
+        "-map", "0:a:0?",
+        "-vn",
+    ]
+    # Local files are stable sources; skip async resampler to avoid periodic
+    # audible artifacts on some ffmpeg + browser combinations.
+    if not _is_local_media_url(stream.url):
+        audio_out += ["-af", "aresample=async=1:first_pts=0"]
+    audio_out += [
+        "-c:a", "mp3",
+        "-b:a", "128k",
+        "-ar", "48000",
+        "-ac", "2",
+        "-f", "mp3",
+        f"pipe:{audio_w}",
+    ]
+
     ff_cmd = [
         "ffmpeg",
         "-loglevel", "error",
@@ -554,13 +582,7 @@ def _start_muxed_pipeline(stream: Stream):
         "-vframes", "99999999",
         "pipe:1",
         # Audio output (extra fd / pipe:3)
-        "-map", "0:a:0?",
-        "-vn",
-        "-af", "aresample=async=1:first_pts=0",
-        "-c:a", "mp3",
-        "-b:a", "128k",
-        "-f", "mp3",
-        f"pipe:{audio_w}",
+        *audio_out,
     ]
     try:
         ff_proc = subprocess.Popen(
@@ -603,12 +625,15 @@ def _run_hls_pipeline(stream: Stream):
     """Pipeline for direct streams (HLS / MPEG-TS / Acestream) — no yt-dlp."""
     is_ace = _is_acestream(stream.url)
     is_pluto = _is_pluto_stream(stream.url)
-    log.info(f"[{stream.id}] Direct pipeline (ace={is_ace}, pluto={is_pluto})")
+    is_local = _is_local_media_url(stream.url)
+    log.info(
+        f"[{stream.id}] Direct pipeline (ace={is_ace}, pluto={is_pluto}, local={is_local})"
+    )
 
     SOI = b"\xff\xd8"
     EOI = b"\xff\xd9"
     try:
-        if is_ace or is_pluto:
+        if is_ace or is_pluto or is_local:
             ff_proc = _start_muxed_pipeline(stream)
         else:
             # HLS path still uses a dedicated audio process.
@@ -1994,8 +2019,7 @@ class Handler(BaseHTTPRequestHandler):
             return None, "Invalid local media path"
         if not os.path.isfile(target):
             return None, "Local media file not found"
-        ext = os.path.splitext(target)[1].lower()
-        if ext not in LOCAL_MEDIA_EXTS:
+        if not _has_supported_media_ext(target):
             return None, "Unsupported local media extension"
         return target, ""
 
@@ -2210,10 +2234,11 @@ class Handler(BaseHTTPRequestHandler):
         try:
             for root, _, names in os.walk(base, followlinks=True):
                 for name in names:
-                    ext = os.path.splitext(name)[1].lower()
-                    if ext not in LOCAL_MEDIA_EXTS:
-                        continue
                     full = os.path.join(root, name)
+                    if not os.path.isfile(full):
+                        continue
+                    if not _has_supported_media_ext(full):
+                        continue
                     rel = os.path.relpath(full, base)
                     files.append({
                         "name": name,

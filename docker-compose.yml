@@ -28,6 +28,10 @@ services:
     volumes:
       - ./subscriptions.json:/subscriptions.json:ro
       - ./local-media:/media/videos:ro
+      # Optional: mount extra host folders directly under /media/videos
+      # so they appear as subfolders in Local Media tab (no extra env needed):
+      # - /home/santi/videos:/media/videos/home-videos:ro
+      # - /mnt/nas/media:/media/videos/nas-media:ro
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
       interval: 30s

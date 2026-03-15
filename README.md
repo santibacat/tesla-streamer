@@ -232,6 +232,31 @@ After changing mounts/env:
 docker compose up -d
 ```
 
+### Multiple directories via YAML only (no manual script)
+
+You can define multiple mounted folders in `docker-compose.yml` and the container
+will show them as subfolders in Local Media directly.
+
+```yaml
+environment:
+  LOCAL_MEDIA_DIR: /media/videos
+volumes:
+  - ./local-media:/media/videos:ro
+  - /home/santi/videos:/media/videos/home-videos:ro
+  - /mnt/nas/media:/media/videos/nas-media:ro
+```
+
+Then just run:
+
+```bash
+docker compose up -d --build
+```
+
+Notes:
+- Symlinks are followed by the scanner (`followlinks=True`).
+- This avoids compose override generation and keeps everything in one YAML.
+- You only declare each extra directory once (in `volumes`).
+
 ---
 
 ## Supported sources
