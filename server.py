@@ -442,7 +442,7 @@ def fetch_title(stream: Stream):
         return  # no yt-dlp for direct streams; title stays empty
     try:
         r = subprocess.run(
-            ["yt-dlp", "--no-playlist", "--print", "title", stream.url],
+            ["yt-dlp", "--js-runtimes", "node", "--no-playlist", "--print", "title", stream.url],
             capture_output=True, text=True, timeout=15
         )
         if r.returncode == 0:
@@ -921,6 +921,7 @@ def run_pipeline(stream: Stream):
         for attempt_idx, fmt in enumerate(_format_candidates(stream.quality), start=1):
             yt_cmd = [
                 "yt-dlp",
+                "--js-runtimes", "node",
                 "--no-playlist",
                 "-f", fmt,
                 "-o", "-",
@@ -3030,6 +3031,7 @@ class Handler(BaseHTTPRequestHandler):
             r = subprocess.run(
                 [
                     "yt-dlp",
+                    "--js-runtimes", "node",
                     "--flat-playlist",
                     "--playlist-end", str(limit),
                     "--print", "%(id)s\t%(title)s\t%(duration)s\t%(thumbnail)s\t%(webpage_url)s",
@@ -3089,6 +3091,7 @@ class Handler(BaseHTTPRequestHandler):
             r = subprocess.run(
                 [
                     "yt-dlp",
+                    "--js-runtimes", "node",
                     "--flat-playlist",
                     "--print", "%(id)s\t%(title)s\t%(duration)s\t%(thumbnail)s\t%(webpage_url)s",
                     "--no-warnings",
@@ -3227,6 +3230,7 @@ class Handler(BaseHTTPRequestHandler):
         """Spawn yt-dlp | ffmpeg for audio starting at seek_s seconds."""
         yt_cmd = [
             "yt-dlp",
+            "--js-runtimes", "node",
             "--no-playlist",
             "-f", "bestaudio[ext=m4a]/bestaudio",
             "-o", "-",

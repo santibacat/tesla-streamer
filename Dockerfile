@@ -7,6 +7,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ffmpeg \
         curl \
         ca-certificates \
+        nodejs \
     && rm -rf /var/lib/apt/lists/*
 
 # Install yt-dlp as a standalone binary (always latest)
