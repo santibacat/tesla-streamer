@@ -49,8 +49,8 @@ PYTHON_IMAGE=mirror.gcr.io/library/python:3.12-slim docker compose up -d --build
 ### 3. Test locally
 
 ```
-http://localhost:8080/health
-http://localhost:8080/
+http://localhost:33333/health
+http://localhost:33333/
 ```
 
 ### 4. Open in Tesla browser
@@ -58,7 +58,7 @@ http://localhost:8080/
 Navigate to your server's status page and use the **Stream** tab, or go directly to:
 
 ```
-http://YOUR_SERVER_IP:8080/watch?url=https://www.youtube.com/watch?v=VIDEO_ID
+http://YOUR_SERVER_IP:33333/watch?url=https://www.youtube.com/watch?v=VIDEO_ID
 ```
 
 ---
@@ -139,8 +139,8 @@ its recent uploads and stream a video.
 
 1. Sign up for a free DDNS provider (no-ip.com, duckdns.org, dynu.com)
 2. Install their update client on your server or router
-3. Port-forward TCP 8080 (or 443 if using nginx TLS) on your router to the server
-4. Open Tesla browser to: `http://yourname.ddns.net:8080/`
+3. Port-forward TCP 33333 (or 443 if using nginx TLS) on your router to the server
+4. Open Tesla browser to: `http://yourname.ddns.net:33333/`
 
 ### Option B — Cloudflare Tunnel (no port forwarding needed)
 
@@ -159,7 +159,7 @@ cloudflared tunnel create tesla-stream
 cloudflared tunnel route dns tesla-stream stream.yourdomain.com
 
 # Run (or add to systemd)
-cloudflared tunnel run --url http://localhost:8080 tesla-stream
+cloudflared tunnel run --url http://localhost:33333 tesla-stream
 ```
 
 Tesla URL becomes: `https://stream.yourdomain.com/`
@@ -230,7 +230,7 @@ Override in `docker-compose.yml` under `environment:`.
 | `502 Pipeline error` | yt-dlp may need updating: rebuild image |
 | `DeadlineExceeded` while pulling base image | Retry with a mirror: `PYTHON_IMAGE=mirror.gcr.io/library/python:3.12-slim docker compose build --no-cache` |
 | Stream stutters on LAN | Lower `MJPEG_FPS` to 12–15 |
-| Can't reach from internet | Check port forwarding / firewall; try `curl http://yourserver:8080/health` from outside |
+| Can't reach from internet | Check port forwarding / firewall; try `curl http://yourserver:33333/health` from outside |
 | Container exits immediately | `docker compose logs streamer` to see the error |
 | Subscriptions panel not visible | `subscriptions.json` not mounted — check volume in docker-compose.yml |
 | `‼ yt-dlp failed` in sync script | Make sure you are logged in to YouTube in the browser you specified |
