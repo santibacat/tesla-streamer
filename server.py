@@ -57,19 +57,30 @@ class Stream:
         self.last_used  = time.time()
         self._yt_proc   = None
         self._ff_proc   = None
+        self._audio_proc: object | None = None   # separate audio ffmpeg for direct streams
         self.started_at : float | None = None
         self.first_frame_at: float | None = None
+        # Audio ring-buffer for direct streams (HLS/MPEG-TS) where a second
+        # connection to the source is not viable.
+        self._audio_lock   = threading.Lock()
+        self._audio_chunks : list[bytes] = []
+        self._audio_ready  = threading.Event()
+        self._audio_done   = False
 
     def stop(self):
-        for proc in [self._ff_proc, self._yt_proc]:
+        for proc in [self._ff_proc, self._yt_proc, self._audio_proc]:
             if proc:
                 try:
                     proc.terminate()
                     proc.wait(timeout=3)
                 except Exception:
                     pass
-        self._ff_proc = None
-        self._yt_proc = None
+        self._ff_proc     = None
+        self._yt_proc     = None
+        self._audio_proc  = None
+        with self._audio_lock:
+            self._audio_done = True
+        self._audio_ready.set()
 
     def to_dict(self):
         return {
@@ -309,47 +320,169 @@ _BROWSER_UA = (
 )
 
 
+def _direct_input_args(url: str) -> list[str]:
+    """ffmpeg input flags for a direct stream URL."""
+    if _is_acestream(url):
+        return ["-timeout", "10000000"]
+    return [
+        "-user_agent", _BROWSER_UA,
+        "-headers", "Referer: https://pluto.tv/\r\n",
+        "-re",
+    ]
+
+
+def _start_audio_buffer(stream: Stream):
+    """Spawn a dedicated ffmpeg process to fill stream._audio_chunks with MP3."""
+    audio_cmd = [
+        "ffmpeg",
+        "-loglevel", "error",
+        *_direct_input_args(stream.url),
+        "-i", stream.url,
+        "-vn",
+        "-af", "aresample=async=1:first_pts=0",
+        "-c:a", "mp3",
+        "-b:a", "128k",
+        "-f", "mp3",
+        "pipe:1",
+    ]
+    audio_proc = subprocess.Popen(
+        audio_cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL
+    )
+    with stream.lock:
+        stream._audio_proc = audio_proc
+    with stream._audio_lock:
+        stream._audio_chunks.clear()
+        stream._audio_done = False
+    stream._audio_ready.clear()
+
+    def _drain():
+        try:
+            while True:
+                chunk = audio_proc.stdout.read(8192)
+                if not chunk:
+                    break
+                with stream._audio_lock:
+                    stream._audio_chunks.append(chunk)
+                stream._audio_ready.set()
+        finally:
+            with stream._audio_lock:
+                stream._audio_done = True
+            stream._audio_ready.set()
+
+    threading.Thread(target=_drain, daemon=True).start()
+
+
+def _start_acestream_muxed_pipeline(stream: Stream):
+    """
+    Start a single ffmpeg process for AceStream that outputs:
+    - video MJPEG frames on stdout (pipe:1)
+    - audio MP3 chunks on fd 3 (pipe:3)
+    This avoids a second source connection for audio.
+    """
+    vf = (
+        f"scale={STREAM_WIDTH}:{STREAM_HEIGHT}"
+        f":force_original_aspect_ratio=decrease,"
+        f"pad={STREAM_WIDTH}:{STREAM_HEIGHT}:(ow-iw)/2:(oh-ih)/2:black"
+    )
+    audio_r, audio_w = os.pipe()
+    ff_cmd = [
+        "ffmpeg",
+        "-loglevel", "error",
+        *_direct_input_args(stream.url),
+        "-probesize", "20M",
+        "-analyzeduration", "10M",
+        "-i", stream.url,
+        # Video output (stdout / pipe:1)
+        "-map", "0:v:0",
+        "-vf", vf,
+        "-fps_mode", "cfr",
+        "-vcodec", "mjpeg",
+        "-q:v", str(FFMPEG_QUALITY),
+        "-r", str(MJPEG_FPS),
+        "-f", "image2pipe",
+        "-vframes", "99999999",
+        "pipe:1",
+        # Audio output (extra fd / pipe:3)
+        "-map", "0:a:0?",
+        "-vn",
+        "-af", "aresample=async=1:first_pts=0",
+        "-c:a", "mp3",
+        "-b:a", "128k",
+        "-f", "mp3",
+        "pipe:3",
+    ]
+    try:
+        ff_proc = subprocess.Popen(
+            ff_cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            pass_fds=(audio_w,),
+        )
+    except Exception:
+        os.close(audio_r)
+        raise
+    finally:
+        os.close(audio_w)
+
+    with stream._audio_lock:
+        stream._audio_chunks.clear()
+        stream._audio_done = False
+    stream._audio_ready.clear()
+
+    def _drain():
+        try:
+            with os.fdopen(audio_r, "rb", buffering=0) as audio_pipe:
+                while True:
+                    chunk = audio_pipe.read(8192)
+                    if not chunk:
+                        break
+                    with stream._audio_lock:
+                        stream._audio_chunks.append(chunk)
+                    stream._audio_ready.set()
+        finally:
+            with stream._audio_lock:
+                stream._audio_done = True
+            stream._audio_ready.set()
+
+    threading.Thread(target=_drain, daemon=True).start()
+    return ff_proc
+
+
 def _run_hls_pipeline(stream: Stream):
     """Pipeline for direct streams (HLS / MPEG-TS / Acestream) — no yt-dlp."""
     is_ace = _is_acestream(stream.url)
     log.info(f"[{stream.id}] Direct pipeline (ace={is_ace})")
 
-    input_args: list[str] = []
-    if is_ace:
-        # Acestream-http-proxy serves MPEG-TS; follow redirects, no UA needed
-        input_args = ["-timeout", "10000000"]
-    else:
-        input_args = [
-            "-user_agent", _BROWSER_UA,
-            "-headers", "Referer: https://pluto.tv/\r\n",
-            "-re",
-        ]
-
-    ff_cmd = [
-        "ffmpeg",
-        "-loglevel", "error",
-        *input_args,
-        "-i", stream.url,
-        "-vf", (
-            f"scale={STREAM_WIDTH}:{STREAM_HEIGHT}"
-            f":force_original_aspect_ratio=decrease,"
-            f"pad={STREAM_WIDTH}:{STREAM_HEIGHT}:(ow-iw)/2:(oh-ih)/2:black"
-        ),
-        "-fps_mode", "cfr",
-        "-vcodec", "mjpeg",
-        "-q:v", str(FFMPEG_QUALITY),
-        "-r", str(MJPEG_FPS),
-        "-an",
-        "-f", "image2pipe",
-        "-vframes", "99999999",
-        "pipe:1",
-    ]
     SOI = b"\xff\xd8"
     EOI = b"\xff\xd9"
     try:
-        ff_proc = subprocess.Popen(
-            ff_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE
-        )
+        if is_ace:
+            ff_proc = _start_acestream_muxed_pipeline(stream)
+        else:
+            # HLS path still uses a dedicated audio process.
+            _start_audio_buffer(stream)
+            ff_cmd = [
+                "ffmpeg",
+                "-loglevel", "error",
+                *_direct_input_args(stream.url),
+                "-i", stream.url,
+                "-vf", (
+                    f"scale={STREAM_WIDTH}:{STREAM_HEIGHT}"
+                    f":force_original_aspect_ratio=decrease,"
+                    f"pad={STREAM_WIDTH}:{STREAM_HEIGHT}:(ow-iw)/2:(oh-ih)/2:black"
+                ),
+                "-fps_mode", "cfr",
+                "-vcodec", "mjpeg",
+                "-q:v", str(FFMPEG_QUALITY),
+                "-r", str(MJPEG_FPS),
+                "-an",
+                "-f", "image2pipe",
+                "-vframes", "99999999",
+                "pipe:1",
+            ]
+            ff_proc = subprocess.Popen(
+                ff_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+            )
         with stream.lock:
             stream._ff_proc = ff_proc
             stream.status = "streaming"
@@ -1759,6 +1892,10 @@ class Handler(BaseHTTPRequestHandler):
                 video_url = webpage
             else:
                 video_url = f"https://www.youtube.com/watch?v={vid_id}"
+            # yt-dlp returns NA for thumbnails in flat-playlist mode on YouTube.
+            # The thumbnail URL is deterministic from the video ID.
+            if (not thumb or thumb == "NA") and "youtube.com" in video_url:
+                thumb = f"https://i.ytimg.com/vi/{vid_id}/mqdefault.jpg"
             videos.append({
                 "id":       vid_id,
                 "title":    title,
@@ -1835,33 +1972,6 @@ class Handler(BaseHTTPRequestHandler):
     @staticmethod
     def _launch_audio_pipeline(url: str, seek_s: float):
         """Spawn yt-dlp | ffmpeg for audio starting at seek_s seconds."""
-        if _is_direct_stream(url):
-            # HLS / MPEG-TS / Acestream: feed URL directly to ffmpeg
-            input_args: list[str] = []
-            if _is_acestream(url):
-                input_args = ["-timeout", "10000000"]
-            else:
-                input_args = [
-                    "-user_agent", _BROWSER_UA,
-                    "-headers", "Referer: https://pluto.tv/\r\n",
-                ]
-            ff_cmd = [
-                "ffmpeg",
-                "-loglevel", "error",
-                *input_args,
-                "-i", url,
-                "-vn",
-                "-af", "aresample=async=1:first_pts=0",
-                "-c:a", "mp3",
-                "-b:a", "128k",
-                "-f", "mp3",
-                "pipe:1",
-            ]
-            ff_proc = subprocess.Popen(
-                ff_cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL
-            )
-            return None, ff_proc
-
         yt_cmd = [
             "yt-dlp",
             "--no-playlist",
@@ -1888,12 +1998,46 @@ class Handler(BaseHTTPRequestHandler):
         return yt_proc, ff_proc
 
     def _serve_audio(self, stream: Stream, sync_ms: int = AUDIO_DELAY_MS):
+        log.info(f"[{stream.id}] Audio starting")
+
+        if _is_direct_stream(stream.url):
+            # Audio may be requested before /stream starts the pipeline.
+            if stream.status == "starting" and stream._ff_proc is None:
+                threading.Thread(target=run_pipeline,
+                                 args=(stream,), daemon=True).start()
+            # For direct streams the audio is already being captured into
+            # stream._audio_chunks by _start_audio_buffer. Drain from there
+            # instead of opening a second connection to the source.
+            try:
+                self.send_response(200)
+                self.send_header("Content-Type", "audio/mpeg")
+                self.send_header("Cache-Control", "no-cache, no-store")
+                self.send_header("Connection", "keep-alive")
+                self.end_headers()
+
+                cursor = 0
+                while True:
+                    # Wait for new chunks to appear
+                    stream._audio_ready.wait(timeout=5)
+                    stream._audio_ready.clear()
+                    with stream._audio_lock:
+                        new_chunks = stream._audio_chunks[cursor:]
+                        cursor += len(new_chunks)
+                        done = stream._audio_done
+                    for ch in new_chunks:
+                        self.wfile.write(ch)
+                    self.wfile.flush()
+                    if done and not new_chunks:
+                        break
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+            return
+
         yt_proc = None
         ff_proc = None
         try:
             # Audio starts from content position 0. The browser delays the
             # /audio request by sync_ms so video gets a head start.
-            log.info(f"[{stream.id}] Audio starting")
             yt_proc, ff_proc = self._launch_audio_pipeline(stream.url, seek_s=0.0)
 
             self.send_response(200)
