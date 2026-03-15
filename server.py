@@ -409,7 +409,7 @@ def _start_acestream_muxed_pipeline(stream: Stream):
         "-c:a", "mp3",
         "-b:a", "128k",
         "-f", "mp3",
-        "pipe:3",
+        f"pipe:{audio_w}",
     ]
     try:
         ff_proc = subprocess.Popen(
@@ -1560,10 +1560,28 @@ WATCH_HTML = """<!DOCTYPE html>
 
   // Start audio first so its pipeline is already running and buffered.
   audio.src = "/audio?sid=" + encodeURIComponent(sid);
+  audio.preload = "auto";
+  audio.muted = false;
+  audio.volume = 1.0;
   try {
     var p = audio.play();
     if (p && typeof p.catch === "function") p.catch(function () {});
   } catch (e) {}
+
+  // Some browsers (including embedded WebViews) may block autoplay without
+  // interaction. Retry on first user gesture.
+  var retryPlay = function () {
+    try {
+      var p2 = audio.play();
+      if (p2 && typeof p2.catch === "function") p2.catch(function () {});
+    } catch (e) {}
+    window.removeEventListener("click", retryPlay, true);
+    window.removeEventListener("touchstart", retryPlay, true);
+    window.removeEventListener("keydown", retryPlay, true);
+  };
+  window.addEventListener("click", retryPlay, true);
+  window.addEventListener("touchstart", retryPlay, true);
+  window.addEventListener("keydown", retryPlay, true);
 
   // Start video after sync_ms so audio has a head start equal to the video
   // pipeline's startup lag, keeping them in sync when the first frame appears.
@@ -2016,6 +2034,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.end_headers()
 
                 cursor = 0
+                sent_bytes = 0
                 while True:
                     # Wait for new chunks to appear
                     stream._audio_ready.wait(timeout=5)
@@ -2026,9 +2045,11 @@ class Handler(BaseHTTPRequestHandler):
                         done = stream._audio_done
                     for ch in new_chunks:
                         self.wfile.write(ch)
+                        sent_bytes += len(ch)
                     self.wfile.flush()
                     if done and not new_chunks:
                         break
+                log.info(f"[{stream.id}] Direct audio ended (bytes={sent_bytes})")
             except (BrokenPipeError, ConnectionResetError):
                 pass
             return
