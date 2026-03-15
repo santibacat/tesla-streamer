@@ -1045,24 +1045,8 @@ STATUS_HTML = """<!DOCTYPE html>
     </p>
     <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
       <input id="yt-id" type="text" placeholder="URL or YouTube video ID">
-      <select id="yt-quality">
-        <option value="">Auto quality</option>
-        <option value="1080">1080p</option>
-        <option value="720">720p</option>
-        <option value="480">480p</option>
-        <option value="360">360p</option>
-        <option value="240">240p</option>
-        <option value="144">144p</option>
-      </select>
-      <select id="yt-sync">
-        <option value="0" selected>Video delay: 0 s (default)</option>
-        <option value="500">Video delay: 0.5 s</option>
-        <option value="1000">Video delay: 1 s</option>
-        <option value="1500">Video delay: 1.5 s</option>
-        <option value="2000">Video delay: 2 s</option>
-        <option value="2500">Video delay: 2.5 s</option>
-        <option value="3000">Video delay: 3 s</option>
-      </select>
+      <div id="yt-quality-btns" style="display:flex;gap:6px;flex-wrap:wrap;"></div>
+      <div id="yt-sync-btns" style="display:flex;gap:6px;flex-wrap:wrap;"></div>
       <button id="go-stream"
               style="background:var(--red);color:white;border:0;border-radius:6px;padding:10px 16px;font-family:'Orbitron',monospace;letter-spacing:.08em;cursor:pointer;">
         OPEN STREAM
@@ -1095,24 +1079,8 @@ STATUS_HTML = """<!DOCTYPE html>
   <div class="card">
     <h2>Playback options</h2>
     <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
-      <select id="feed-quality">
-        <option value="">Auto quality</option>
-        <option value="1080">1080p</option>
-        <option value="720">720p</option>
-        <option value="480">480p</option>
-        <option value="360">360p</option>
-        <option value="240">240p</option>
-        <option value="144">144p</option>
-      </select>
-      <select id="feed-sync">
-        <option value="0" selected>Delay: 0 s</option>
-        <option value="500">Delay: 0.5 s</option>
-        <option value="1000">Delay: 1 s</option>
-        <option value="1500">Delay: 1.5 s</option>
-        <option value="2000">Delay: 2 s</option>
-        <option value="2500">Delay: 2.5 s</option>
-        <option value="3000">Delay: 3 s</option>
-      </select>
+      <div id="feed-quality-btns" style="display:flex;gap:6px;flex-wrap:wrap;"></div>
+      <div id="feed-sync-btns" style="display:flex;gap:6px;flex-wrap:wrap;"></div>
     </div>
   </div>
 
@@ -1145,21 +1113,8 @@ STATUS_HTML = """<!DOCTYPE html>
   <div class="card">
     <h2>Playback options</h2>
     <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
-      <select id="twitch-quality">
-        <option value="">Auto quality</option>
-        <option value="1080">1080p</option>
-        <option value="720">720p</option>
-        <option value="480">480p</option>
-        <option value="360">360p</option>
-        <option value="240">240p</option>
-      </select>
-      <select id="twitch-sync">
-        <option value="0" selected>Delay: 0 s</option>
-        <option value="500">Delay: 0.5 s</option>
-        <option value="1000">Delay: 1 s</option>
-        <option value="1500">Delay: 1.5 s</option>
-        <option value="2000">Delay: 2 s</option>
-      </select>
+      <div id="twitch-quality-btns" style="display:flex;gap:6px;flex-wrap:wrap;"></div>
+      <div id="twitch-sync-btns" style="display:flex;gap:6px;flex-wrap:wrap;"></div>
     </div>
   </div>
   <div class="card">
@@ -1185,13 +1140,7 @@ STATUS_HTML = """<!DOCTYPE html>
   <div class="card">
     <h2>Playback options</h2>
     <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
-      <select id="pluto-sync">
-        <option value="0" selected>Delay: 0 s</option>
-        <option value="500">Delay: 0.5 s</option>
-        <option value="1000">Delay: 1 s</option>
-        <option value="1500">Delay: 1.5 s</option>
-        <option value="2000">Delay: 2 s</option>
-      </select>
+      <div id="pluto-sync-btns" style="display:flex;gap:6px;flex-wrap:wrap;"></div>
       <input id="pluto-filter" type="text" placeholder="Filter channels…"
              style="flex:1;min-width:180px;background:#0d0d14;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px 12px;font-family:monospace;">
     </div>
@@ -1209,34 +1158,28 @@ STATUS_HTML = """<!DOCTYPE html>
   <div class="card">
     <h2>Playback options</h2>
     <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
-      <select id="iptv-quality">
-        <option value="">Auto quality</option>
-        <option value="1080">1080p</option>
-        <option value="720">720p</option>
-        <option value="480">480p</option>
-        <option value="360">360p</option>
-        <option value="240">240p</option>
-      </select>
-      <select id="iptv-sync">
-        <option value="0" selected>Delay: 0 s</option>
-        <option value="500">Delay: 0.5 s</option>
-        <option value="1000">Delay: 1 s</option>
-        <option value="1500">Delay: 1.5 s</option>
-        <option value="2000">Delay: 2 s</option>
-      </select>
+      <div id="iptv-quality-btns" style="display:flex;gap:6px;flex-wrap:wrap;"></div>
+      <div id="iptv-sync-btns" style="display:flex;gap:6px;flex-wrap:wrap;"></div>
     </div>
   </div>
   <div class="card">
     <h2>IPTV lists</h2>
     <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:14px;">
-      <select id="iptv-list-select" style="flex:1;min-width:180px;"></select>
-      <button id="iptv-load"
-              style="background:var(--red);color:white;border:0;border-radius:6px;padding:8px 14px;font-family:'Orbitron',monospace;font-size:.7rem;letter-spacing:.08em;cursor:pointer;">
-        LOAD LIST
+      <button id="iptv-prev"
+              style="background:transparent;color:var(--muted);border:1px solid var(--border);border-radius:6px;padding:8px 14px;font-family:'Orbitron',monospace;font-size:.9rem;cursor:pointer;">
+        ◄
+      </button>
+      <div id="iptv-list-name"
+           style="flex:1;min-width:180px;color:var(--text);font-size:.85rem;text-align:center;padding:8px;border:1px solid var(--border);border-radius:6px;background:#0d0d14;">
+        Select a list
+      </div>
+      <button id="iptv-next"
+              style="background:transparent;color:var(--muted);border:1px solid var(--border);border-radius:6px;padding:8px 14px;font-family:'Orbitron',monospace;font-size:.9rem;cursor:pointer;">
+        ►
       </button>
       <button id="iptv-refresh"
-              style="background:transparent;color:var(--muted);border:1px solid var(--border);border-radius:6px;padding:8px 14px;font-family:'Orbitron',monospace;font-size:.7rem;letter-spacing:.08em;cursor:pointer;">
-        REFRESH LISTS
+              style="background:var(--red);color:white;border:0;border-radius:6px;padding:8px 14px;font-family:'Orbitron',monospace;font-size:.7rem;letter-spacing:.08em;cursor:pointer;">
+        REFRESH
       </button>
     </div>
     <input id="iptv-filter" type="text" placeholder="Filter streams..."
@@ -1251,20 +1194,8 @@ STATUS_HTML = """<!DOCTYPE html>
   <div class="card">
     <h2>Playback options</h2>
     <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
-      <select id="ace-quality">
-        <option value="">Auto quality</option>
-        <option value="1080">1080p</option>
-        <option value="720">720p</option>
-        <option value="480">480p</option>
-        <option value="360">360p</option>
-      </select>
-      <select id="ace-sync">
-        <option value="0" selected>Delay: 0 s</option>
-        <option value="500">Delay: 0.5 s</option>
-        <option value="1000">Delay: 1 s</option>
-        <option value="1500">Delay: 1.5 s</option>
-        <option value="2000">Delay: 2 s</option>
-      </select>
+      <div id="ace-quality-btns" style="display:flex;gap:6px;flex-wrap:wrap;"></div>
+      <div id="ace-sync-btns" style="display:flex;gap:6px;flex-wrap:wrap;"></div>
     </div>
   </div>
   <div class="card">
@@ -1302,18 +1233,7 @@ STATUS_HTML = """<!DOCTYPE html>
   <div class="card">
     <h2>Playback options</h2>
     <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
-      <select id="local-sync">
-        <option value="{{local_media_video_delay_ms}}" selected>
-          Delay: {{local_media_video_delay_ms}} ms (recommended)
-        </option>
-        <option value="0">Delay: 0 s</option>
-        <option value="500">Delay: 0.5 s</option>
-        <option value="1000">Delay: 1 s</option>
-        <option value="1500">Delay: 1.5 s</option>
-        <option value="2000">Delay: 2 s</option>
-        <option value="2500">Delay: 2.5 s</option>
-        <option value="3000">Delay: 3 s</option>
-      </select>
+      <div id="local-sync-btns" style="display:flex;gap:6px;flex-wrap:wrap;"></div>
       <button id="local-refresh"
               style="background:var(--red);color:white;border:0;border-radius:6px;padding:8px 14px;font-family:'Orbitron',monospace;font-size:.7rem;letter-spacing:.08em;cursor:pointer;">
         REFRESH LIST
@@ -1368,12 +1288,64 @@ STATUS_HTML = """<!DOCTYPE html>
     });
   });
 
+  // ── Button group helper ──
+  function createButtonGroup(containerId, options, defaultValue) {
+    var container = document.getElementById(containerId);
+    var state = { value: defaultValue || "" };
+
+    options.forEach(function (opt) {
+      var btn = document.createElement("button");
+      btn.setAttribute("data-value", opt.value);
+      btn.textContent = opt.label;
+      btn.style.cssText = "font-family:'Orbitron',monospace;font-size:.7rem;" +
+        "letter-spacing:.08em;padding:6px 12px;border-radius:6px;" +
+        "border:1px solid var(--border);cursor:pointer;";
+      btn.addEventListener("click", function () {
+        state.value = opt.value;
+        container.querySelectorAll("button").forEach(function (b) {
+          b.style.background = b.getAttribute("data-value") === state.value
+            ? "var(--red)" : "transparent";
+          b.style.color = b.getAttribute("data-value") === state.value
+            ? "#fff" : "var(--muted)";
+        });
+      });
+      container.appendChild(btn);
+    });
+
+    // Set initial active state
+    container.querySelectorAll("button").forEach(function (b) {
+      b.style.background = b.getAttribute("data-value") === state.value
+        ? "var(--red)" : "transparent";
+      b.style.color = b.getAttribute("data-value") === state.value
+        ? "#fff" : "var(--muted)";
+    });
+
+    return state;
+  }
+
   // ── Stream tab ──
   var idInput    = document.getElementById("yt-id");
-  var qualitySel = document.getElementById("yt-quality");
-  var syncSel    = document.getElementById("yt-sync");
   var goButton   = document.getElementById("go-stream");
-  syncSel.value  = "{{audio_delay_ms}}";
+
+  var qualitySel = createButtonGroup("yt-quality-btns", [
+    { value: "", label: "AUTO" },
+    { value: "1080", label: "1080p" },
+    { value: "720", label: "720p" },
+    { value: "480", label: "480p" },
+    { value: "360", label: "360p" },
+    { value: "240", label: "240p" },
+    { value: "144", label: "144p" }
+  ], "");
+
+  var syncSel = createButtonGroup("yt-sync-btns", [
+    { value: "0", label: "0s" },
+    { value: "500", label: "0.5s" },
+    { value: "1000", label: "1s" },
+    { value: "1500", label: "1.5s" },
+    { value: "2000", label: "2s" },
+    { value: "2500", label: "2.5s" },
+    { value: "3000", label: "3s" }
+  ], "{{audio_delay_ms}}");
 
   function buildWatchUrl(videoUrl, quality, sync) {
     var target = "/watch?url=" + encodeURIComponent(videoUrl);
@@ -1411,15 +1383,29 @@ STATUS_HTML = """<!DOCTYPE html>
   });
 
   // ── Twitch tab ──
-  var twitchQuality  = document.getElementById("twitch-quality");
-  var twitchSync     = document.getElementById("twitch-sync");
   var twitchLiveCh   = document.getElementById("twitch-live-channel");
   var twitchLiveGo   = document.getElementById("twitch-live-go");
   var twitchVodCh    = document.getElementById("twitch-vod-channel");
   var twitchVodGo    = document.getElementById("twitch-vod-go");
   var twitchVodSt    = document.getElementById("twitch-vod-status");
   var twitchVodGrid  = document.getElementById("twitch-vod-grid");
-  twitchSync.value   = "{{audio_delay_ms}}";
+
+  var twitchQuality = createButtonGroup("twitch-quality-btns", [
+    { value: "", label: "AUTO" },
+    { value: "1080", label: "1080p" },
+    { value: "720", label: "720p" },
+    { value: "480", label: "480p" },
+    { value: "360", label: "360p" },
+    { value: "240", label: "240p" }
+  ], "");
+
+  var twitchSync = createButtonGroup("twitch-sync-btns", [
+    { value: "0", label: "0s" },
+    { value: "500", label: "0.5s" },
+    { value: "1000", label: "1s" },
+    { value: "1500", label: "1.5s" },
+    { value: "2000", label: "2s" }
+  ], "{{audio_delay_ms}}");
 
   twitchLiveGo.addEventListener("click", function () {
     var ch = (twitchLiveCh.value || "").trim().replace(/^@/, "");
@@ -1475,12 +1461,18 @@ STATUS_HTML = """<!DOCTYPE html>
   });
 
   // ── Pluto TV tab ──
-  var plutoSync     = document.getElementById("pluto-sync");
   var plutoFilter   = document.getElementById("pluto-filter");
   var plutoStatus   = document.getElementById("pluto-status");
   var plutoList     = document.getElementById("pluto-list");
   var plutoLangBtns = document.getElementById("pluto-lang-btns");
-  plutoSync.value   = "{{audio_delay_ms}}";
+
+  var plutoSync = createButtonGroup("pluto-sync-btns", [
+    { value: "0", label: "0s" },
+    { value: "500", label: "0.5s" },
+    { value: "1000", label: "1s" },
+    { value: "1500", label: "1.5s" },
+    { value: "2000", label: "2s" }
+  ], "{{audio_delay_ms}}");
 
   var plutoByLang   = {};   // { lang: [channels] }
   var plutoMetaByLang = {}; // { lang: { country: "...", refresh_at: n } }
@@ -1616,41 +1608,76 @@ STATUS_HTML = """<!DOCTYPE html>
   plutoFilter.addEventListener("input", applyPlutoFilter);
 
   // ── IPTV tab ──
-  var iptvQuality   = document.getElementById("iptv-quality");
-  var iptvSync      = document.getElementById("iptv-sync");
-  var iptvListSel   = document.getElementById("iptv-list-select");
-  var iptvLoadBtn   = document.getElementById("iptv-load");
+  var iptvPrevBtn   = document.getElementById("iptv-prev");
+  var iptvNextBtn   = document.getElementById("iptv-next");
+  var iptvListName  = document.getElementById("iptv-list-name");
   var iptvRefreshBtn= document.getElementById("iptv-refresh");
   var iptvFilter    = document.getElementById("iptv-filter");
   var iptvStatus    = document.getElementById("iptv-status");
   var iptvStreamsEl = document.getElementById("iptv-streams");
-  iptvSync.value    = "{{audio_delay_ms}}";
+
+  var iptvQuality = createButtonGroup("iptv-quality-btns", [
+    { value: "", label: "AUTO" },
+    { value: "1080", label: "1080p" },
+    { value: "720", label: "720p" },
+    { value: "480", label: "480p" },
+    { value: "360", label: "360p" },
+    { value: "240", label: "240p" }
+  ], "");
+
+  var iptvSync = createButtonGroup("iptv-sync-btns", [
+    { value: "0", label: "0s" },
+    { value: "500", label: "0.5s" },
+    { value: "1000", label: "1s" },
+    { value: "1500", label: "1.5s" },
+    { value: "2000", label: "2s" }
+  ], "{{audio_delay_ms}}");
 
   var iptvLists = [];
   var iptvStreams = [];
+  var iptvCurrentIndex = 0;
 
   function selectedIptvListId() {
-    return (iptvListSel.value || "").trim();
+    if (!iptvLists.length || iptvCurrentIndex < 0) return "";
+    return iptvLists[iptvCurrentIndex].id || "";
+  }
+
+  function updateIptvListDisplay() {
+    if (!iptvLists.length) {
+      iptvListName.textContent = "No .m3u lists found";
+      iptvListName.style.color = "var(--muted)";
+      iptvPrevBtn.disabled = true;
+      iptvNextBtn.disabled = true;
+      iptvPrevBtn.style.opacity = "0.3";
+      iptvNextBtn.style.opacity = "0.3";
+      return;
+    }
+    iptvPrevBtn.disabled = false;
+    iptvNextBtn.disabled = false;
+    iptvPrevBtn.style.opacity = "1";
+    iptvNextBtn.style.opacity = "1";
+    var current = iptvLists[iptvCurrentIndex];
+    iptvListName.textContent = current.name + " (" + (iptvCurrentIndex + 1) + "/" + iptvLists.length + ")";
+    iptvListName.style.color = "var(--text)";
   }
 
   function renderIptvLists() {
-    iptvListSel.innerHTML = "";
-    if (!iptvLists.length) {
-      var emptyOpt = document.createElement("option");
-      emptyOpt.value = "";
-      emptyOpt.textContent = "No .m3u lists found";
-      iptvListSel.appendChild(emptyOpt);
-      iptvListSel.disabled = true;
-      return;
-    }
-    iptvListSel.disabled = false;
-    iptvLists.forEach(function (item) {
-      var opt = document.createElement("option");
-      opt.value = item.id;
-      opt.textContent = item.name + " (" + item.path + ")";
-      iptvListSel.appendChild(opt);
-    });
+    updateIptvListDisplay();
   }
+
+  iptvPrevBtn.addEventListener("click", function () {
+    if (!iptvLists.length) return;
+    iptvCurrentIndex = (iptvCurrentIndex - 1 + iptvLists.length) % iptvLists.length;
+    updateIptvListDisplay();
+    loadIptvStreams();
+  });
+
+  iptvNextBtn.addEventListener("click", function () {
+    if (!iptvLists.length) return;
+    iptvCurrentIndex = (iptvCurrentIndex + 1) % iptvLists.length;
+    updateIptvListDisplay();
+    loadIptvStreams();
+  });
 
   function renderIptvStreams(list) {
     var q = (iptvFilter.value || "").toLowerCase().trim();
@@ -1735,14 +1762,14 @@ STATUS_HTML = """<!DOCTYPE html>
       }
       iptvStatus.textContent = iptvLists.length + " IPTV lists found";
       if (autoloadFirst) {
-        iptvListSel.selectedIndex = 0;
+        iptvCurrentIndex = 0;
+        updateIptvListDisplay();
         loadIptvStreams();
       }
     };
     xhr.send();
   }
 
-  iptvLoadBtn.addEventListener("click", loadIptvStreams);
   iptvRefreshBtn.addEventListener("click", function () { loadIptvLists(false); });
   iptvFilter.addEventListener("input", function () {
     if (!iptvStreams.length) return;
@@ -1758,13 +1785,30 @@ STATUS_HTML = """<!DOCTYPE html>
 
   // ── Feed tab ──
   var feedChannel  = document.getElementById("feed-channel");
-  var feedQuality  = document.getElementById("feed-quality");
-  var feedSync     = document.getElementById("feed-sync");
   var feedGoBtn    = document.getElementById("feed-go");
   var feedStatus   = document.getElementById("feed-status");
   var feedGrid     = document.getElementById("feed-grid");
   var feedCardTitle= document.getElementById("feed-card-title");
-  feedSync.value   = "{{audio_delay_ms}}";
+
+  var feedQuality = createButtonGroup("feed-quality-btns", [
+    { value: "", label: "AUTO" },
+    { value: "1080", label: "1080p" },
+    { value: "720", label: "720p" },
+    { value: "480", label: "480p" },
+    { value: "360", label: "360p" },
+    { value: "240", label: "240p" },
+    { value: "144", label: "144p" }
+  ], "");
+
+  var feedSync = createButtonGroup("feed-sync-btns", [
+    { value: "0", label: "0s" },
+    { value: "500", label: "0.5s" },
+    { value: "1000", label: "1s" },
+    { value: "1500", label: "1.5s" },
+    { value: "2000", label: "2s" },
+    { value: "2500", label: "2.5s" },
+    { value: "3000", label: "3s" }
+  ], "{{audio_delay_ms}}");
 
   // Subscriptions
   var subsCard   = document.getElementById("subs-card");
@@ -1919,8 +1963,6 @@ STATUS_HTML = """<!DOCTYPE html>
   });
 
   // ── Acestream tab ──
-  var aceQuality  = document.getElementById("ace-quality");
-  var aceSync     = document.getElementById("ace-sync");
   var aceIdInput  = document.getElementById("ace-id");
   var aceHost     = document.getElementById("ace-host");
   var aceGo       = document.getElementById("ace-go");
@@ -1928,7 +1970,22 @@ STATUS_HTML = """<!DOCTYPE html>
   var aceSaveId   = document.getElementById("ace-save-id");
   var aceSaveBtn  = document.getElementById("ace-save-btn");
   var aceSavedList= document.getElementById("ace-saved-list");
-  aceSync.value   = "{{audio_delay_ms}}";
+
+  var aceQuality = createButtonGroup("ace-quality-btns", [
+    { value: "", label: "AUTO" },
+    { value: "1080", label: "1080p" },
+    { value: "720", label: "720p" },
+    { value: "480", label: "480p" },
+    { value: "360", label: "360p" }
+  ], "");
+
+  var aceSync = createButtonGroup("ace-sync-btns", [
+    { value: "0", label: "0s" },
+    { value: "500", label: "0.5s" },
+    { value: "1000", label: "1s" },
+    { value: "1500", label: "1.5s" },
+    { value: "2000", label: "2s" }
+  ], "{{audio_delay_ms}}");
 
   // Persist proxy host and saved streams in localStorage
   var ACE_HOST_KEY    = "ace_proxy_host";
@@ -2031,11 +2088,20 @@ STATUS_HTML = """<!DOCTYPE html>
   renderSaved();
 
   // ── Local Media tab ──
-  var localSync    = document.getElementById("local-sync");
   var localRefresh = document.getElementById("local-refresh");
   var localStatus  = document.getElementById("local-status");
   var localList    = document.getElementById("local-list");
-  localSync.value  = "{{local_media_video_delay_ms}}";
+
+  var localSync = createButtonGroup("local-sync-btns", [
+    { value: "{{local_media_video_delay_ms}}", label: "{{local_media_video_delay_ms}}ms" },
+    { value: "0", label: "0s" },
+    { value: "500", label: "0.5s" },
+    { value: "1000", label: "1s" },
+    { value: "1500", label: "1.5s" },
+    { value: "2000", label: "2s" },
+    { value: "2500", label: "2.5s" },
+    { value: "3000", label: "3s" }
+  ], "{{local_media_video_delay_ms}}");
 
   function renderLocalFiles(files) {
     localList.innerHTML = "";
