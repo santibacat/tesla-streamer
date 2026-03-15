@@ -152,9 +152,10 @@ registry = Registry()
 class PlutoCache:
     def __init__(self):
         self._lock  = threading.Lock()
-        # { lang: [channel_dict, …] }
         self._by_lang: dict[str, list[dict]] = {}
-        self._errors: dict[str, str] = {}
+        self._errors:  dict[str, str]        = {}
+        # { lang: (device_id, stitcher_params, refresh_at) }
+        self._sessions: dict[str, tuple[str, str, float]] = {}
 
     def get(self, lang: str) -> tuple[list[dict], str]:
         with self._lock:
@@ -164,11 +165,48 @@ class PlutoCache:
         with self._lock:
             return list(self._by_lang.keys())
 
+    def _boot(self, lang: str) -> tuple[str, str, int] | None:
+        """Call Pluto boot API and return (device_id, stitcher_params, refresh_in_sec)."""
+        import urllib.request, uuid
+        region = lang.upper()
+        device_id = str(uuid.uuid4())
+        url = (
+            f"https://boot.pluto.tv/v4/start"
+            f"?appName=web&appVersion=7.7.0-a9f8f90e"
+            f"&deviceDNT=0&deviceId={device_id}&deviceMake=Chrome"
+            f"&deviceModel=web&deviceType=web&deviceVersion=unknown"
+            f"&clientModelNumber=na&serverSideAds=false"
+            f"&marketingRegion={region}&clientID={device_id}"
+        )
+        try:
+            req = urllib.request.Request(
+                url, headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
+            )
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                data = json.loads(resp.read().decode())
+        except Exception as e:
+            log.warning(f"Pluto TV [{lang}] boot failed: {e}")
+            return None
+        params = data.get("stitcherParams", "")
+        refresh = int(data.get("refreshInSec", 28800))
+        if not params:
+            log.warning(f"Pluto TV [{lang}] boot returned no stitcherParams")
+            return None
+        return device_id, params, refresh
+
     def _fetch_lang(self, lang: str):
         import urllib.request
+        boot = self._boot(lang)
+        if boot is None:
+            with self._lock:
+                self._errors[lang] = "boot API failed"
+            return
+        device_id, stitcher_params, refresh_in = boot
+
+        region = lang.upper()
         api_url = (
             f"https://api.pluto.tv/v2/channels"
-            f"?lang={lang}&deviceType=web&deviceId=teslastreamer"
+            f"?lang={lang}&deviceType=web&deviceId={device_id}"
             f"&appName=web&appVersion=7&clientTime=0"
         )
         try:
@@ -180,7 +218,7 @@ class PlutoCache:
         except Exception as e:
             with self._lock:
                 self._errors[lang] = str(e)
-            log.warning(f"Pluto TV [{lang}] refresh failed: {e}")
+            log.warning(f"Pluto TV [{lang}] channels fetch failed: {e}")
             return
 
         channels = []
@@ -188,23 +226,28 @@ class PlutoCache:
             if not ch.get("isStitched"):
                 continue
             urls = ch.get("stitched", {}).get("urls", [])
-            hls = next(
+            hls_base = next(
                 (u["url"].split("?")[0] for u in urls if u.get("type") == "hls"),
                 None,
             )
-            if not hls:
+            if not hls_base:
                 continue
+            # Attach the valid session stitcherParams from the boot response
+            hls_url = f"{hls_base}?{stitcher_params}"
             channels.append({
                 "name":     ch.get("name", ""),
                 "category": ch.get("category", ""),
-                "url":      hls,
+                "url":      hls_url,
             })
         channels.sort(key=lambda c: (c["category"], c["name"]))
 
         with self._lock:
             self._by_lang[lang] = channels
             self._errors.pop(lang, None)
-        log.info(f"Pluto TV [{lang}]: loaded {len(channels)} channels")
+            self._sessions[lang] = (device_id, stitcher_params,
+                                    time.time() + refresh_in)
+        log.info(f"Pluto TV [{lang}]: loaded {len(channels)} channels "
+                 f"(refresh in {refresh_in//3600}h)")
 
     def refresh_all(self):
         for lang in PLUTO_LANGS:
@@ -213,8 +256,13 @@ class PlutoCache:
     def start_background_refresh(self):
         def _loop():
             while True:
-                self.refresh_all()
-                time.sleep(PLUTO_REFRESH_SECS)
+                now = time.time()
+                for lang in PLUTO_LANGS:
+                    with self._lock:
+                        _, _, refresh_at = self._sessions.get(lang, ("", "", 0))
+                    if now >= refresh_at:
+                        self._fetch_lang(lang)
+                time.sleep(300)  # check every 5 min
         threading.Thread(target=_loop, daemon=True).start()
 
 
@@ -235,9 +283,97 @@ def fetch_title(stream: Stream):
         pass
 
 
+def _is_direct_hls(url: str) -> bool:
+    """True for raw HLS manifest URLs that ffmpeg can consume directly."""
+    from urllib.parse import urlparse
+    path = urlparse(url).path.lower()
+    return path.endswith(".m3u8") or path.endswith(".m3u")
+
+
+def _run_hls_pipeline(stream: Stream):
+    """Pipeline for direct HLS streams (e.g. Pluto TV) — no yt-dlp needed."""
+    log.info(f"[{stream.id}] HLS direct pipeline")
+    ff_cmd = [
+        "ffmpeg",
+        "-loglevel", "error",
+        "-re",
+        "-i", stream.url,
+        "-vf", (
+            f"scale={STREAM_WIDTH}:{STREAM_HEIGHT}"
+            f":force_original_aspect_ratio=decrease,"
+            f"pad={STREAM_WIDTH}:{STREAM_HEIGHT}:(ow-iw)/2:(oh-ih)/2:black"
+        ),
+        "-fps_mode", "cfr",
+        "-vcodec", "mjpeg",
+        "-q:v", str(FFMPEG_QUALITY),
+        "-r", str(MJPEG_FPS),
+        "-an",
+        "-f", "image2pipe",
+        "-vframes", "99999999",
+        "pipe:1",
+    ]
+    SOI = b"\xff\xd8"
+    EOI = b"\xff\xd9"
+    try:
+        ff_proc = subprocess.Popen(
+            ff_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+        )
+        with stream.lock:
+            stream._ff_proc = ff_proc
+            stream.status = "streaming"
+            if stream.started_at is None:
+                stream.started_at = time.time()
+
+        buf = b""
+        while True:
+            chunk = ff_proc.stdout.read(65536)
+            if not chunk:
+                break
+            buf += chunk
+            while True:
+                start = buf.find(SOI)
+                if start == -1:
+                    buf = b""
+                    break
+                end = buf.find(EOI, start + 2)
+                if end == -1:
+                    buf = buf[start:]
+                    break
+                frame = buf[start:end + 2]
+                buf = buf[end + 2:]
+                with stream.lock:
+                    stream.frame = frame
+                    stream.last_used = time.time()
+                    if stream.first_frame_at is None:
+                        stream.first_frame_at = time.time()
+
+        ff_rc = ff_proc.poll()
+        produced = stream.frame is not None
+        with stream.lock:
+            if produced:
+                stream.status = "done"
+            else:
+                ff_err = ff_proc.stderr.read(500).decode("utf-8", errors="replace")
+                stream.status = "error"
+                stream.error = "No video frames from HLS stream"
+                stream.error_detail = f"ff_rc={ff_rc} ff_err={ff_err}"
+        log.info(f"[{stream.id}] HLS pipeline finished (rc={ff_rc})")
+    except Exception as e:
+        with stream.lock:
+            stream.status = "error"
+            stream.error = str(e)
+        log.error(f"[{stream.id}] HLS pipeline error: {e}")
+    finally:
+        stream.stop()
+
+
 def run_pipeline(stream: Stream):
     log.info(f"[{stream.id}] Starting pipeline for: {stream.url[:80]}")
     threading.Thread(target=fetch_title, args=(stream,), daemon=True).start()
+
+    if _is_direct_hls(stream.url):
+        _run_hls_pipeline(stream)
+        return
 
     try:
         def _format_candidates(quality: int | None) -> list[str]:
@@ -789,7 +925,7 @@ STATUS_HTML = """<!DOCTYPE html>
 
   var plutoByLang   = {};   // { lang: [channels] }
   var plutoActiveLang = null;
-  var plutoLangs    = "{{pluto_langs}}".split(",").map(function(s){ return s.trim(); });
+  var plutoLangs    = {{pluto_langs_json}};
 
   function renderPluto(channels) {
     plutoList.innerHTML = "";
@@ -1172,7 +1308,8 @@ def render_status_page() -> str:
             .replace("{{max_streams}}", str(MAX_STREAMS))
             .replace("{{audio_delay_ms}}", str(AUDIO_DELAY_MS))
             .replace("{{subs_status}}", subs_status)
-            .replace("{{pluto_langs}}", ", ".join(PLUTO_LANGS)))
+            .replace("{{pluto_langs}}", ", ".join(PLUTO_LANGS))
+            .replace("{{pluto_langs_json}}", json.dumps(PLUTO_LANGS)))
 
 def render_watch_page(stream_id: str, sync_ms: int) -> str:
     return (WATCH_HTML
@@ -1502,6 +1639,24 @@ class Handler(BaseHTTPRequestHandler):
     @staticmethod
     def _launch_audio_pipeline(url: str, seek_s: float):
         """Spawn yt-dlp | ffmpeg for audio starting at seek_s seconds."""
+        if _is_direct_hls(url):
+            # HLS stream: feed URL directly to ffmpeg, no yt-dlp needed
+            ff_cmd = [
+                "ffmpeg",
+                "-loglevel", "error",
+                "-i", url,
+                "-vn",
+                "-af", "aresample=async=1:first_pts=0",
+                "-c:a", "mp3",
+                "-b:a", "128k",
+                "-f", "mp3",
+                "pipe:1",
+            ]
+            ff_proc = subprocess.Popen(
+                ff_cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL
+            )
+            return None, ff_proc
+
         yt_cmd = [
             "yt-dlp",
             "--no-playlist",
