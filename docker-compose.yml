@@ -15,23 +15,23 @@ services:
     environment:
       PORT:          8080
       MJPEG_FPS:     24
-      FFMPEG_QUALITY: 3   # 1=best quality, 31=smallest file
+      FFMPEG_QUALITY: 15   # 1=best quality, 31=smallest file
       STREAM_WIDTH:  1920
       STREAM_HEIGHT: 1080
       MAX_STREAMS:   3    # max parallel videos
       PLUTO_LANGS:   es,en  # comma-separated Pluto TV regions: es, en, de, fr, it, …
-      LOCAL_MEDIA_DIR: /media/videos
+      LOCAL_MEDIA_DIR: /media
       # SUBSCRIPTIONS_FILE: /subscriptions.json  # path inside container (default)
     # Generate subscriptions.json at home with:
     #   uv run sync_subscriptions.py --cookies cookies.txt
     # Then mount it here so the streamer can read it without needing cookies.
     volumes:
       - ./subscriptions.json:/subscriptions.json:ro
-      - ./local-media:/media/videos:ro
-      # Optional: mount extra host folders directly under /media/videos
-      # so they appear as subfolders in Local Media tab (no extra env needed):
-      # - /home/santi/videos:/media/videos/home-videos:ro
-      # - /mnt/nas/media:/media/videos/nas-media:ro
+      - ./local-media:/media/local-media:ro
+      # Optional: mount extra host folders as siblings under /media.
+      # Avoid nested bind mounts under another read-only mount.
+      # - /home/santi/videos:/media/home-videos:ro
+      # - /mnt/nas/media:/media/nas-media:ro
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
       interval: 30s

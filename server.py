@@ -15,6 +15,7 @@ import os
 import signal
 import json
 import logging
+from collections import deque
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs, unquote, quote
 from socketserver import ThreadingMixIn
@@ -54,6 +55,9 @@ STREAM_WIDTH  = int(os.environ.get("STREAM_WIDTH", "1920"))
 STREAM_HEIGHT = int(os.environ.get("STREAM_HEIGHT", "1080"))
 MAX_STREAMS   = int(os.environ.get("MAX_STREAMS", "3"))       # concurrent stream slots
 AUDIO_DELAY_MS= int(os.environ.get("AUDIO_DELAY_MS", "0"))   # ms to delay video start after audio, to keep streams in sync
+LOCAL_MEDIA_VIDEO_DELAY_MS = int(
+    os.environ.get("LOCAL_MEDIA_VIDEO_DELAY_MS", "1500")
+)
 SUBSCRIPTIONS_FILE  = os.environ.get("SUBSCRIPTIONS_FILE", "/subscriptions.json")
 # Comma-separated list of Pluto TV language codes to load, e.g. "es,en"
 PLUTO_LANGS         = [l.strip() for l in os.environ.get("PLUTO_LANGS", "es,en").split(",") if l.strip()]
@@ -96,6 +100,7 @@ class Stream:
         self._audio_chunks : list[bytes] = []
         self._audio_ready  = threading.Event()
         self._audio_done   = False
+        self._frame_history = deque(maxlen=max(MJPEG_FPS * 12, 120))
 
     def stop(self):
         for proc in [self._ff_proc, self._yt_proc, self._audio_proc]:
@@ -111,6 +116,8 @@ class Stream:
         with self._audio_lock:
             self._audio_done = True
         self._audio_ready.set()
+        with self.lock:
+            self._frame_history.clear()
 
     def to_dict(self):
         return {
@@ -685,6 +692,7 @@ def _run_hls_pipeline(stream: Stream):
                 buf = buf[end + 2:]
                 with stream.lock:
                     stream.frame = frame
+                    stream._frame_history.append((time.time(), frame))
                     stream.last_used = time.time()
                     if stream.first_frame_at is None:
                         stream.first_frame_at = time.time()
@@ -843,6 +851,7 @@ def run_pipeline(stream: Stream):
                     buf = buf[end + 2:]
                     with stream.lock:
                         stream.frame = frame
+                        stream._frame_history.append((time.time(), frame))
                         stream.last_used = time.time()
                         if stream.first_frame_at is None:
                             stream.first_frame_at = time.time()
@@ -1179,7 +1188,10 @@ STATUS_HTML = """<!DOCTYPE html>
     <h2>Playback options</h2>
     <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
       <select id="local-sync">
-        <option value="0" selected>Delay: 0 s</option>
+        <option value="{{local_media_video_delay_ms}}" selected>
+          Delay: {{local_media_video_delay_ms}} ms (recommended)
+        </option>
+        <option value="0">Delay: 0 s</option>
         <option value="500">Delay: 0.5 s</option>
         <option value="1000">Delay: 1 s</option>
         <option value="1500">Delay: 1.5 s</option>
@@ -1765,7 +1777,7 @@ STATUS_HTML = """<!DOCTYPE html>
   var localRefresh = document.getElementById("local-refresh");
   var localStatus  = document.getElementById("local-status");
   var localList    = document.getElementById("local-list");
-  localSync.value  = "{{audio_delay_ms}}";
+  localSync.value  = "{{local_media_video_delay_ms}}";
 
   function renderLocalFiles(files) {
     localList.innerHTML = "";
@@ -1888,11 +1900,9 @@ WATCH_HTML = """<!DOCTYPE html>
   window.addEventListener("touchstart", retryPlay, true);
   window.addEventListener("keydown", retryPlay, true);
 
-  // Start video after sync_ms so audio has a head start equal to the video
-  // pipeline's startup lag, keeping them in sync when the first frame appears.
-  setTimeout(function () {
-    img.src = "/stream" + q;
-  }, parseInt(syncMs, 10) || 0);
+  // Always request video immediately; server-side frame buffering applies
+  // sync_ms without skipping content from the beginning.
+  img.src = "/stream" + q;
 
   function showDiag(message) {
     diag.style.display = "block";
@@ -1959,6 +1969,7 @@ def render_status_page() -> str:
             .replace("{{height}}", str(STREAM_HEIGHT))
             .replace("{{max_streams}}", str(MAX_STREAMS))
             .replace("{{audio_delay_ms}}", str(AUDIO_DELAY_MS))
+            .replace("{{local_media_video_delay_ms}}", str(LOCAL_MEDIA_VIDEO_DELAY_MS))
             .replace("{{subs_status}}", subs_status)
             .replace("{{pluto_langs}}", ", ".join(PLUTO_LANGS))
             .replace("{{pluto_langs_json}}", json.dumps(PLUTO_LANGS))
@@ -2062,11 +2073,14 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/local_watch":
             raw_file = qs.get("file", [None])[0]
             raw_sync = qs.get("sync", [None])[0]
-            try:
-                sync_ms = self._parse_sync_ms(raw_sync)
-            except ValueError as e:
-                self._error(400, str(e))
-                return
+            if raw_sync is None or raw_sync == "":
+                sync_ms = LOCAL_MEDIA_VIDEO_DELAY_MS
+            else:
+                try:
+                    sync_ms = self._parse_sync_ms(raw_sync)
+                except ValueError as e:
+                    self._error(400, str(e))
+                    return
             local_file, err = self._resolve_local_media_path(raw_file)
             if not local_file:
                 self._error(400, err)
@@ -2078,6 +2092,17 @@ class Handler(BaseHTTPRequestHandler):
                 quality=None,
                 reuse_existing=False,
             )
+            # Warm local playback so configured sync delay reflects timeline
+            # delay rather than ffmpeg startup overhead.
+            if stream.status == "starting" and stream._ff_proc is None:
+                threading.Thread(target=run_pipeline, args=(stream,), daemon=True).start()
+            warm_deadline = time.time() + 8.0
+            while (
+                stream.frame is None
+                and stream.status not in ("error", "done")
+                and time.time() < warm_deadline
+            ):
+                time.sleep(0.05)
             self._html(render_watch_page(stream.id, sync_ms))
 
         elif path == "/pluto_channels":
@@ -2154,6 +2179,12 @@ class Handler(BaseHTTPRequestHandler):
             self._html(render_watch_page(stream.id, sync_ms))
 
         elif path == "/stream":
+            raw_sync = qs.get("sync", [None])[0]
+            try:
+                sync_ms = self._parse_sync_ms(raw_sync)
+            except ValueError as e:
+                self._error(400, str(e))
+                return
             sid = qs.get("sid", [None])[0]
             stream = None
             if sid:
@@ -2174,7 +2205,7 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 video_url = unquote(raw_url)
                 stream = registry.get_or_create(video_url, quality=quality)
-            self._serve_mjpeg(stream)
+            self._serve_mjpeg(stream, sync_ms=sync_ms)
 
         elif path == "/audio":
             raw_sync = qs.get("sync", [None])[0]
@@ -2337,8 +2368,9 @@ class Handler(BaseHTTPRequestHandler):
         self._json({"channel": url, "videos": videos})
 
     # ── MJPEG ─────────────────────────────────────────────────────────────────
-    def _serve_mjpeg(self, stream: Stream):
+    def _serve_mjpeg(self, stream: Stream, sync_ms: int = 0):
         registry.cleanup_done()
+        delay_s = max(0.0, sync_ms / 1000.0)
 
         # Start pipeline if not already running
         if stream.status == "starting" and stream._ff_proc is None:
@@ -2352,6 +2384,19 @@ class Handler(BaseHTTPRequestHandler):
                 self._error(504, "Timed out waiting for first frame")
                 return
             time.sleep(0.1)
+        if delay_s > 0:
+            # Let delayed playback have enough buffered frames so the first
+            # shown frame starts near content time 0.
+            while stream.status not in ("error", "done"):
+                with stream.lock:
+                    if stream._frame_history:
+                        oldest_ts = stream._frame_history[0][0]
+                        newest_ts = stream._frame_history[-1][0]
+                        if newest_ts - oldest_ts >= delay_s:
+                            break
+                if time.time() > deadline:
+                    break
+                time.sleep(0.05)
 
         if stream.status == "error":
             detail = f" ({stream.error_detail})" if stream.error_detail else ""
@@ -2379,7 +2424,15 @@ class Handler(BaseHTTPRequestHandler):
                 t0 = time.monotonic()
 
                 with stream.lock:
-                    frame = stream.frame
+                    if delay_s <= 0:
+                        frame = stream.frame
+                    else:
+                        cutoff = time.time() - delay_s
+                        frame = None
+                        for ts, candidate in reversed(stream._frame_history):
+                            if ts <= cutoff:
+                                frame = candidate
+                                break
 
                 if frame and frame is not last_frame:
                     last_frame = frame
