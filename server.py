@@ -96,6 +96,7 @@ class Stream:
         self._yt_proc   = None
         self._ff_proc   = None
         self._audio_proc: object | None = None   # separate audio ffmpeg for direct streams
+        self.seek_s     : float = 0.0
         self.started_at : float | None = None
         self.first_frame_at: float | None = None
         # Audio ring-buffer for direct streams (HLS/MPEG-TS) where a second
@@ -919,48 +920,74 @@ def run_pipeline(stream: Stream):
         attempt_errors: list[str] = []
 
         for attempt_idx, fmt in enumerate(_format_candidates(stream.quality), start=1):
-            yt_cmd = [
-                "yt-dlp",
-                "--js-runtimes", "node",
-                "--no-playlist",
-                "-f", fmt,
-                "-o", "-",
-                "--quiet",
-                stream.url,
-            ]
+            yt_proc = None
 
-            ff_cmd = [
-                "ffmpeg",
-                "-loglevel", "error",
-                "-re",
-                "-i", "pipe:0",
-                "-vf", (
-                    f"scale={STREAM_WIDTH}:{STREAM_HEIGHT}"
-                    f":force_original_aspect_ratio=decrease,"
-                    f"pad={STREAM_WIDTH}:{STREAM_HEIGHT}:(ow-iw)/2:(oh-ih)/2:black"
-                ),
-                "-fps_mode", "cfr",
-                "-vcodec", "mjpeg",
-                "-q:v", str(FFMPEG_QUALITY),
-                "-r", str(MJPEG_FPS),
-                "-f", "image2pipe",
-                "-vframes", "99999999",
-                "pipe:1",
-            ]
+            if stream.seek_s > 0:
+                # Resolve direct CDN URL so ffmpeg can seek via HTTP ranges.
+                url_r = subprocess.run(
+                    ["yt-dlp", "--js-runtimes", "node", "--no-playlist",
+                     "-f", fmt, "--get-url", "--quiet", stream.url],
+                    capture_output=True, text=True, timeout=30,
+                )
+                direct_url = url_r.stdout.strip().splitlines()[0] if url_r.returncode == 0 else ""
+                if not direct_url:
+                    attempt_errors.append(
+                        f"attempt={attempt_idx} fmt={fmt} yt-dlp --get-url failed: {url_r.stderr.strip()}"
+                    )
+                    continue
+                ff_cmd = [
+                    "ffmpeg",
+                    "-loglevel", "error",
+                    "-ss", str(int(stream.seek_s)),
+                    "-i", direct_url,
+                    "-vf", (
+                        f"scale={STREAM_WIDTH}:{STREAM_HEIGHT}"
+                        f":force_original_aspect_ratio=decrease,"
+                        f"pad={STREAM_WIDTH}:{STREAM_HEIGHT}:(ow-iw)/2:(oh-ih)/2:black"
+                    ),
+                    "-fps_mode", "cfr",
+                    "-vcodec", "mjpeg",
+                    "-q:v", str(FFMPEG_QUALITY),
+                    "-r", str(MJPEG_FPS),
+                    "-f", "image2pipe",
+                    "-vframes", "99999999",
+                    "pipe:1",
+                ]
+                ff_proc = subprocess.Popen(ff_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            else:
+                yt_cmd = [
+                    "yt-dlp",
+                    "--js-runtimes", "node",
+                    "--no-playlist",
+                    "-f", fmt,
+                    "-o", "-",
+                    "--quiet",
+                    stream.url,
+                ]
+                ff_cmd = [
+                    "ffmpeg",
+                    "-loglevel", "error",
+                    "-re",
+                    "-i", "pipe:0",
+                    "-vf", (
+                        f"scale={STREAM_WIDTH}:{STREAM_HEIGHT}"
+                        f":force_original_aspect_ratio=decrease,"
+                        f"pad={STREAM_WIDTH}:{STREAM_HEIGHT}:(ow-iw)/2:(oh-ih)/2:black"
+                    ),
+                    "-fps_mode", "cfr",
+                    "-vcodec", "mjpeg",
+                    "-q:v", str(FFMPEG_QUALITY),
+                    "-r", str(MJPEG_FPS),
+                    "-f", "image2pipe",
+                    "-vframes", "99999999",
+                    "pipe:1",
+                ]
+                yt_proc = subprocess.Popen(yt_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                ff_proc = subprocess.Popen(ff_cmd, stdin=yt_proc.stdout,
+                                           stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
             yt_stderr_chunks: list[str] = []
             ff_stderr_chunks: list[str] = []
-            yt_proc = subprocess.Popen(
-                yt_cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-            )
-            ff_proc = subprocess.Popen(
-                ff_cmd,
-                stdin=yt_proc.stdout,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-            )
 
             with stream.lock:
                 stream._yt_proc = yt_proc
@@ -969,17 +996,18 @@ def run_pipeline(stream: Stream):
                 if stream.started_at is None:
                     stream.started_at = time.time()
 
-            yt_err_t = threading.Thread(
-                target=_drain_stderr,
-                args=(yt_proc.stderr, yt_stderr_chunks),
-                daemon=True,
-            )
+            if yt_proc is not None:
+                yt_err_t = threading.Thread(
+                    target=_drain_stderr,
+                    args=(yt_proc.stderr, yt_stderr_chunks),
+                    daemon=True,
+                )
+                yt_err_t.start()
             ff_err_t = threading.Thread(
                 target=_drain_stderr,
                 args=(ff_proc.stderr, ff_stderr_chunks),
                 daemon=True,
             )
-            yt_err_t.start()
             ff_err_t.start()
 
             log.info(f"[{stream.id}] Pipeline running (attempt {attempt_idx}, fmt={fmt})")
@@ -1380,6 +1408,7 @@ STATUS_HTML = """<!DOCTYPE html>
 </div>
 
 <footer>Tesla is a trademark of Tesla, Inc. OpenCarStream is unofficial and not affiliated with or endorsed by Tesla. YouTube is a trademark of Google LLC, Twitch is a trademark of Twitch Interactive, Inc., and X/Twitter is a trademark of X Corp.; OpenCarStream is not affiliated with or endorsed by any of them.</footer>
+<p id="weather-text" style="margin-top:10px;color:var(--muted);font-size:.85rem;text-align:center;"></p>
 
 <script>
 (function () {
@@ -1973,19 +2002,62 @@ STATUS_HTML = """<!DOCTYPE html>
     xhr.send();
   })();
 
+  // ── Favorites (persisted in localStorage) ────────────────────────────────
+  var FAVS_KEY = "ocs_fav_channels";
+  function loadFavs() {
+    try { return JSON.parse(localStorage.getItem(FAVS_KEY) || "{}"); } catch(e) { return {}; }
+  }
+  function saveFavs(favs) {
+    try { localStorage.setItem(FAVS_KEY, JSON.stringify(favs)); } catch(e) {}
+  }
+  function sortWithFavs(channels) {
+    var favs = loadFavs();
+    return channels.slice().sort(function(a, b) {
+      var fa = favs[a.url] ? 1 : 0, fb = favs[b.url] ? 1 : 0;
+      if (fa !== fb) return fb - fa;
+      return a.name.localeCompare(b.name);
+    });
+  }
+
   function renderChannelList(channels) {
     subsList.innerHTML = "";
-    channels.forEach(function (ch) {
+    var favs = loadFavs();
+    var sorted = sortWithFavs(channels);
+    sorted.forEach(function (ch) {
+      var isFav = !!favs[ch.url];
       var row = document.createElement("div");
       row.className = "stream-row";
       row.style.cursor = "pointer";
-      row.innerHTML = '<a style="color:var(--text);font-size:.95rem;">' + escHtml(ch.name) + '</a>' +
-                      '<span style="font-family:monospace;font-size:.75rem;color:var(--muted);">LOAD →</span>';
+      row.style.alignItems = "center";
+
+      var star = document.createElement("span");
+      star.textContent = isFav ? "★" : "☆";
+      star.title = isFav ? "Remove from favorites" : "Add to favorites";
+      star.style.cssText = "font-size:1.2rem;margin-right:8px;flex-shrink:0;color:" + (isFav ? "#f5c518" : "var(--muted)") + ";cursor:pointer;user-select:none;";
+      star.addEventListener("click", function (e) {
+        e.stopPropagation();
+        var f = loadFavs();
+        if (f[ch.url]) { delete f[ch.url]; } else { f[ch.url] = true; }
+        saveFavs(f);
+        applyFilter();
+      });
+
+      var label = document.createElement("a");
+      label.style.cssText = "color:var(--text);font-size:.95rem;flex:1;";
+      label.textContent = ch.name;
+
+      var arrow = document.createElement("span");
+      arrow.style.cssText = "font-family:monospace;font-size:.75rem;color:var(--muted);";
+      arrow.textContent = "LOAD →";
+
+      row.appendChild(star);
+      row.appendChild(label);
+      row.appendChild(arrow);
+
       row.addEventListener("click", function () {
         feedChannel.value = ch.url;
         feedCardTitle.textContent = ch.name + " — recent uploads";
         loadFeed();
-        // Scroll to feed card
         feedGrid.scrollIntoView({behavior: "smooth", block: "start"});
       });
       subsList.appendChild(row);
@@ -2032,6 +2104,60 @@ STATUS_HTML = """<!DOCTYPE html>
   });
 
   subsFilter.addEventListener("input", applyFilter);
+
+  // ── Weather (IP-based, no geolocation API needed) ──────────────────────
+  (function initWeather() {
+    var WMO_ICONS = {
+      0:"☀️",1:"🌤️",2:"⛅",3:"☁️",45:"🌫️",48:"🌫️",
+      51:"🌦️",53:"🌦️",55:"🌧️",61:"🌧️",63:"🌧️",65:"🌧️",
+      71:"🌨️",73:"🌨️",75:"❄️",80:"🌦️",81:"🌧️",82:"⛈️",
+      95:"⛈️",96:"⛈️",99:"⛈️"
+    };
+    var WMO_DESC = {
+      0:"Clear sky",1:"Mainly clear",2:"Partly cloudy",3:"Overcast",
+      45:"Fog",48:"Icy fog",51:"Light drizzle",53:"Drizzle",55:"Heavy drizzle",
+      61:"Light rain",63:"Rain",65:"Heavy rain",71:"Light snow",73:"Snow",
+      75:"Heavy snow",80:"Showers",81:"Rain showers",82:"Violent showers",
+      95:"Thunderstorm",96:"Thunderstorm w/ hail",99:"Thunderstorm w/ heavy hail"
+    };
+
+    function showWeatherText(temp, code, city) {
+      var el = document.getElementById("weather-text");
+      if (!el) return;
+      var icon = WMO_ICONS[code] || "🌡️";
+      var desc = WMO_DESC[code] || "";
+      el.textContent = icon + " " + Math.round(temp) + "°C  " + desc + (city ? "  ·  " + city : "");
+    }
+
+    function fetchWeather(lat, lon, city) {
+      var xhr = new XMLHttpRequest();
+      xhr.open("GET", "https://api.open-meteo.com/v1/forecast?latitude=" + lat +
+               "&longitude=" + lon + "&current_weather=true&forecast_days=1", true);
+      xhr.timeout = 8000;
+      xhr.onreadystatechange = function() {
+        if (xhr.readyState !== 4 || xhr.status !== 200) return;
+        try {
+          var d = JSON.parse(xhr.responseText);
+          var cw = d.current_weather;
+          showWeatherText(cw.temperature, cw.weathercode, city);
+        } catch(e) {}
+      };
+      xhr.send();
+    }
+
+    // Use IP geolocation — works over HTTP, no browser permission needed
+    var xhr = new XMLHttpRequest();
+    xhr.open("GET", "https://ipapi.co/json/", true);
+    xhr.timeout = 6000;
+    xhr.onreadystatechange = function() {
+      if (xhr.readyState !== 4 || xhr.status !== 200) return;
+      try {
+        var d = JSON.parse(xhr.responseText);
+        if (d.latitude && d.longitude) fetchWeather(d.latitude, d.longitude, d.city || "");
+      } catch(e) {}
+    };
+    xhr.send();
+  })();
 
   function fmtDuration(secs) {
     var s = parseInt(secs, 10);
@@ -2427,6 +2553,12 @@ WATCH_HTML = """<!DOCTYPE html>
   img{width:100%;height:auto;display:block;background:black;border-radius:8px;}
   audio{width:100%;margin-top:10px;}
   .diag{margin-top:10px;padding:10px 12px;border:1px solid var(--border);border-radius:8px;font-family:monospace;font-size:.85rem;line-height:1.4;white-space:pre-wrap;color:#f0b5bf;background:#160d11;display:none;}
+  .seek-bar{display:flex;align-items:center;gap:10px;margin-top:10px;flex-wrap:wrap;}
+  .seek-btn{background:var(--panel);border:1px solid var(--border);color:var(--text);font-family:'Rajdhani',sans-serif;font-size:1rem;font-weight:500;padding:6px 14px;border-radius:6px;cursor:pointer;transition:border-color .15s,color .15s;}
+  .seek-btn:hover{border-color:var(--red);color:var(--red);}
+  .seek-btn.active{border-color:var(--red);color:var(--red);}
+  .seek-pending{font-family:monospace;font-size:.9rem;color:var(--red);min-width:80px;}
+  .seek-cancel{background:none;border:none;color:#888;font-size:.8rem;cursor:pointer;text-decoration:underline;padding:0;}
 </style>
 </head>
 <body>
@@ -2437,12 +2569,21 @@ WATCH_HTML = """<!DOCTYPE html>
   <div class="wrap">
     <img id="mjpeg" alt="Live MJPEG stream">
     <audio id="audio" controls autoplay playsinline></audio>
+    <div class="seek-bar">
+      <button class="seek-btn" data-mins="1">+1 min</button>
+      <button class="seek-btn" data-mins="5">+5 min</button>
+      <button class="seek-btn" data-mins="10">+10 min</button>
+      <span id="seek-pending" class="seek-pending"></span>
+      <button id="seek-cancel" class="seek-cancel" style="display:none">cancel</button>
+    </div>
     <div id="diag" class="diag"></div>
   </div>
 <script>
 (function () {
   var sid = "{{stream_id}}";
   var syncMs = "{{sync_ms}}";
+  var videoUrl = "{{video_url}}";
+  var videoQuality = "{{video_quality}}";
   if (!sid) {
     window.location.href = "/";
     return;
@@ -2451,6 +2592,8 @@ WATCH_HTML = """<!DOCTYPE html>
   var img = document.getElementById("mjpeg");
   var audio = document.getElementById("audio");
   var diag = document.getElementById("diag");
+  var seekPending = document.getElementById("seek-pending");
+  var seekCancel = document.getElementById("seek-cancel");
 
   // Start audio first so its pipeline is already running and buffered.
   audio.src = "/audio?sid=" + encodeURIComponent(sid);
@@ -2510,6 +2653,68 @@ WATCH_HTML = """<!DOCTYPE html>
     };
     xhr.send();
   });
+
+  // ── Seek controls ────────────────────────────────────────────────────────
+  // Read seek offset already applied (so accumulated offset stays correct
+  // if the user seeks multiple times).
+  var params = new URLSearchParams(window.location.search);
+  var baseSeekS = parseInt(params.get("seek") || "0", 10) || 0;
+  var pendingOffsetS = 0;
+  var seekTimer = null;
+  var countdownInterval = null;
+  var SEEK_DEBOUNCE_MS = 3000;
+
+  function fmtOffset(s) {
+    var m = Math.floor(s / 60);
+    var sec = s % 60;
+    return "+" + m + "m" + (sec ? sec + "s" : "");
+  }
+
+  function startSeekTimer() {
+    clearTimeout(seekTimer);
+    clearInterval(countdownInterval);
+    var countdown = SEEK_DEBOUNCE_MS / 1000;
+    seekPending.textContent = fmtOffset(pendingOffsetS) + " (seeking in " + countdown + "s)";
+    seekCancel.style.display = "inline";
+
+    countdownInterval = setInterval(function () {
+      countdown--;
+      if (countdown > 0) {
+        seekPending.textContent = fmtOffset(pendingOffsetS) + " (seeking in " + countdown + "s)";
+      }
+    }, 1000);
+
+    seekTimer = setTimeout(function () {
+      clearInterval(countdownInterval);
+      var targetSeek = baseSeekS + pendingOffsetS;
+      seekPending.textContent = "Reloading\u2026";
+      seekCancel.style.display = "none";
+      var watchUrl = "/watch?url=" + encodeURIComponent(videoUrl) + "&seek=" + targetSeek;
+      if (videoQuality) watchUrl += "&quality=" + encodeURIComponent(videoQuality);
+      if (syncMs && syncMs !== "0") watchUrl += "&sync=" + encodeURIComponent(syncMs);
+      window.location.href = watchUrl;
+    }, SEEK_DEBOUNCE_MS);
+  }
+
+  if (videoUrl) {
+    document.querySelectorAll(".seek-btn").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        pendingOffsetS += parseInt(btn.getAttribute("data-mins"), 10) * 60;
+        startSeekTimer();
+      });
+    });
+
+    seekCancel.addEventListener("click", function () {
+      clearTimeout(seekTimer);
+      clearInterval(countdownInterval);
+      pendingOffsetS = 0;
+      seekPending.textContent = "";
+      seekCancel.style.display = "none";
+    });
+  } else {
+    // Seek not available (e.g. direct stream, local file)
+    document.querySelector(".seek-bar").style.display = "none";
+  }
 })();
 </script>
 </body></html>"""
@@ -2554,10 +2759,12 @@ def render_status_page() -> str:
             .replace("{{pluto_langs_json}}", json.dumps(PLUTO_LANGS))
             .replace("{{local_media_dir}}", LOCAL_MEDIA_DIR))
 
-def render_watch_page(stream_id: str, sync_ms: int) -> str:
+def render_watch_page(stream_id: str, sync_ms: int, video_url: str = "", quality: int | None = None) -> str:
     return (WATCH_HTML
             .replace("{{stream_id}}", stream_id)
-            .replace("{{sync_ms}}", str(sync_ms)))
+            .replace("{{sync_ms}}", str(sync_ms))
+            .replace("{{video_url}}", video_url)
+            .replace("{{video_quality}}", str(quality or "")))
 
 
 # ── HTTP handler ──────────────────────────────────────────────────────────────
@@ -2799,6 +3006,10 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError as e:
                 self._error(400, str(e))
                 return
+            try:
+                seek_s = max(0.0, float(qs.get("seek", [0])[0] or 0))
+            except (ValueError, TypeError):
+                seek_s = 0.0
             video_url = unquote(raw_url)
             registry.cleanup_done()
             stream = registry.get_or_create(
@@ -2806,7 +3017,8 @@ class Handler(BaseHTTPRequestHandler):
                 quality=quality,
                 reuse_existing=False,
             )
-            self._html(render_watch_page(stream.id, sync_ms))
+            stream.seek_s = seek_s
+            self._html(render_watch_page(stream.id, sync_ms, video_url, quality))
 
         elif path == "/stream":
             raw_sync = qs.get("sync", [None])[0]
@@ -3228,6 +3440,25 @@ class Handler(BaseHTTPRequestHandler):
     @staticmethod
     def _launch_audio_pipeline(url: str, seek_s: float):
         """Spawn yt-dlp | ffmpeg for audio starting at seek_s seconds."""
+        if seek_s > 0:
+            # Resolve direct URL so ffmpeg can seek via HTTP ranges.
+            url_r = subprocess.run(
+                ["yt-dlp", "--js-runtimes", "node", "--no-playlist",
+                 "-f", "bestaudio[ext=m4a]/bestaudio", "--get-url", "--quiet", url],
+                capture_output=True, text=True, timeout=30,
+            )
+            direct_url = url_r.stdout.strip().splitlines()[0] if url_r.returncode == 0 else ""
+            if direct_url:
+                ff_cmd = [
+                    "ffmpeg", "-loglevel", "error",
+                    "-ss", str(int(seek_s)),
+                    "-i", direct_url,
+                    "-vn",
+                    "-af", "aresample=async=1:first_pts=0",
+                    "-c:a", "mp3", "-b:a", "128k", "-f", "mp3", "pipe:1",
+                ]
+                ff_proc = subprocess.Popen(ff_cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+                return None, ff_proc
         yt_cmd = [
             "yt-dlp",
             "--js-runtimes", "node",
@@ -3240,7 +3471,6 @@ class Handler(BaseHTTPRequestHandler):
         ff_cmd = [
             "ffmpeg",
             "-loglevel", "error",
-            "-ss", f"{seek_s:.3f}",
             "-i", "pipe:0",
             "-vn",
             "-af", "aresample=async=1:first_pts=0",
@@ -3296,9 +3526,8 @@ class Handler(BaseHTTPRequestHandler):
         yt_proc = None
         ff_proc = None
         try:
-            # Audio starts from content position 0. The browser delays the
-            # /audio request by sync_ms so video gets a head start.
-            yt_proc, ff_proc = self._launch_audio_pipeline(stream.url, seek_s=0.0)
+            # Audio starts from the same seek position as the video stream.
+            yt_proc, ff_proc = self._launch_audio_pipeline(stream.url, seek_s=stream.seek_s)
 
             self.send_response(200)
             self.send_header("Content-Type", "audio/mpeg")
