@@ -502,6 +502,28 @@ def _is_direct_stream(url: str) -> bool:
             or _is_rtp_stream(url) or _is_local_network_stream(url))
 
 
+def _is_youtube_url(url: str) -> bool:
+    """True for YouTube watch/channel URLs."""
+    return "youtube.com" in url or "youtu.be" in url
+
+
+def _is_twitch_url(url: str) -> bool:
+    """True for Twitch stream URLs."""
+    return "twitch.tv" in url
+
+
+def _default_sync_ms_for_url(url: str) -> int:
+    """Return the default sync delay (ms) based on stream source type."""
+    if _is_youtube_url(url) or _is_twitch_url(url):
+        return 500
+    if _is_pluto_stream(url):
+        return 500
+    if _is_direct_hls(url) or _is_local_network_stream(url):
+        # IPTV / HLS streams
+        return 1000
+    return AUDIO_DELAY_MS
+
+
 def _ffmpeg_input_target(url: str) -> str:
     """Return ffmpeg-safe input target from stream url."""
     if _is_local_media_url(url):
@@ -2793,9 +2815,9 @@ class Handler(BaseHTTPRequestHandler):
         return quality
 
     @staticmethod
-    def _parse_sync_ms(raw_sync: str | None) -> int:
+    def _parse_sync_ms(raw_sync: str | None, default_ms: int | None = None) -> int:
         if raw_sync is None or raw_sync == "":
-            return AUDIO_DELAY_MS
+            return AUDIO_DELAY_MS if default_ms is None else default_ms
         try:
             sync_ms = int(raw_sync)
         except ValueError:
@@ -2955,7 +2977,7 @@ class Handler(BaseHTTPRequestHandler):
                 return
             raw_sync = qs.get("sync", [None])[0]
             try:
-                sync_ms = self._parse_sync_ms(raw_sync)
+                sync_ms = self._parse_sync_ms(raw_sync, 500)
             except ValueError as e:
                 self._error(400, str(e))
                 return
@@ -3002,8 +3024,9 @@ class Handler(BaseHTTPRequestHandler):
                 self._error(400, str(e))
                 return
             raw_sync = qs.get("sync", [None])[0]
+            video_url = unquote(raw_url)
             try:
-                sync_ms = self._parse_sync_ms(raw_sync)
+                sync_ms = self._parse_sync_ms(raw_sync, _default_sync_ms_for_url(video_url))
             except ValueError as e:
                 self._error(400, str(e))
                 return
@@ -3011,7 +3034,6 @@ class Handler(BaseHTTPRequestHandler):
                 seek_s = max(0.0, float(qs.get("seek", [0])[0] or 0))
             except (ValueError, TypeError):
                 seek_s = 0.0
-            video_url = unquote(raw_url)
             registry.cleanup_done()
             stream = registry.get_or_create(
                 video_url,
