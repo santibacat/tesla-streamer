@@ -2503,19 +2503,68 @@ STATUS_HTML = """<!DOCTYPE html>
     { value: "4000", label: "4s" }
   ], "{{local_media_video_delay_ms}}");
 
-  function renderLocalFiles(files) {
+  var localCurrentDir = "";
+
+  function renderLocalBrowser(data) {
     localList.innerHTML = "";
-    if (!files.length) {
-      localList.innerHTML = '<p class="empty">No video files found in configured folder.</p>';
+    var folders = data.folders || [];
+    var files = data.files || [];
+    var currentDir = data.current_dir || "";
+
+    // Breadcrumb
+    var crumb = document.createElement("div");
+    crumb.style.cssText = "font-size:.8rem;color:var(--muted);margin-bottom:8px;display:flex;flex-wrap:wrap;gap:4px;align-items:center;";
+    var parts = currentDir ? currentDir.split("/") : [];
+    var rootSpan = document.createElement("span");
+    rootSpan.textContent = "\\uD83D\\uDCC1 /";
+    rootSpan.style.cssText = "cursor:pointer;color:var(--accent);";
+    rootSpan.addEventListener("click", function () { loadLocalDir(""); });
+    crumb.appendChild(rootSpan);
+    parts.forEach(function (part, i) {
+      var sep = document.createElement("span");
+      sep.textContent = " / ";
+      crumb.appendChild(sep);
+      var sp = document.createElement("span");
+      sp.textContent = part;
+      var dirPath = parts.slice(0, i + 1).join("/");
+      if (i < parts.length - 1) {
+        sp.style.cssText = "cursor:pointer;color:var(--accent);";
+        sp.addEventListener("click", (function(d){ return function(){ loadLocalDir(d); }; })(dirPath));
+      } else {
+        sp.style.color = "var(--text)";
+      }
+      crumb.appendChild(sp);
+    });
+    localList.appendChild(crumb);
+
+    if (!folders.length && !files.length) {
+      var empty = document.createElement("p");
+      empty.className = "empty";
+      empty.textContent = "No video files or subfolders here.";
+      localList.appendChild(empty);
       return;
     }
+
+    // Folders
+    folders.forEach(function (item) {
+      var row = document.createElement("div");
+      row.className = "stream-row";
+      row.style.cursor = "pointer";
+      row.innerHTML =
+        '<span style="font-size:.95rem;">\\uD83D\\uDCC2 ' + escHtml(item.name) + '</span>' +
+        '<span style="font-family:monospace;font-size:.75rem;color:var(--muted);">OPEN \u2192</span>';
+      row.addEventListener("click", function () { loadLocalDir(item.path); });
+      localList.appendChild(row);
+    });
+
+    // Files
     files.forEach(function (item) {
       var row = document.createElement("div");
       row.className = "stream-row";
       row.style.cursor = "pointer";
       row.innerHTML =
-        '<span style="font-size:.95rem;">' + escHtml(item.name || item.path) + '</span>' +
-        '<span style="font-family:monospace;font-size:.75rem;color:var(--muted);">OPEN \u2192</span>';
+        '<span style="font-size:.95rem;">\\uD83C\\uDFA5 ' + escHtml(item.name) + '</span>' +
+        '<span style="font-family:monospace;font-size:.75rem;color:var(--muted);">PLAY \u2192</span>';
       row.addEventListener("click", function () {
         window.location.href =
           "/local_watch?file=" + encodeURIComponent(item.path) +
@@ -2525,11 +2574,12 @@ STATUS_HTML = """<!DOCTYPE html>
     });
   }
 
-  function loadLocalFiles() {
-    localStatus.textContent = "Loading local files…";
+  function loadLocalDir(dir) {
+    localCurrentDir = dir || "";
+    localStatus.textContent = "Loading…";
     localList.innerHTML = "";
     var xhr = new XMLHttpRequest();
-    xhr.open("GET", "/local_media", true);
+    xhr.open("GET", "/local_media" + (dir ? "?dir=" + encodeURIComponent(dir) : ""), true);
     xhr.timeout = 10000;
     xhr.onreadystatechange = function () {
       if (xhr.readyState !== 4) return;
@@ -2538,19 +2588,19 @@ STATUS_HTML = """<!DOCTYPE html>
         localStatus.textContent = "Failed to parse response."; return;
       }
       if (data.error) { localStatus.textContent = "Error: " + data.error; return; }
-      var files = data.files || [];
-      localStatus.textContent = files.length + " local videos";
-      renderLocalFiles(files);
+      var total = (data.folders || []).length + (data.files || []).length;
+      localStatus.textContent = total + " item" + (total !== 1 ? "s" : "");
+      renderLocalBrowser(data);
     };
     xhr.send();
   }
 
-  localRefresh.addEventListener("click", loadLocalFiles);
+  localRefresh.addEventListener("click", function () { loadLocalDir(localCurrentDir); });
   var localOpened = false;
   document.querySelector('[data-tab="local"]').addEventListener("click", function () {
     if (localOpened) return;
     localOpened = true;
-    loadLocalFiles();
+    loadLocalDir("");
   });
 })();
 </script>
@@ -2928,7 +2978,8 @@ class Handler(BaseHTTPRequestHandler):
             self._serve_iptv_streams(list_name)
 
         elif path == "/local_media":
-            self._serve_local_media()
+            raw_dir = qs.get("dir", [None])[0]
+            self._serve_local_media(raw_dir)
 
         elif path == "/local_watch":
             raw_file = qs.get("file", [None])[0]
@@ -3208,30 +3259,46 @@ class Handler(BaseHTTPRequestHandler):
             "streams": streams,
         })
 
-    def _serve_local_media(self):
+    def _serve_local_media(self, rel_dir: str | None = None):
         base = os.path.abspath(LOCAL_MEDIA_DIR)
         if not os.path.isdir(base):
             self._error(503, f"Local media directory not found: {base}")
             return
+        # Resolve the requested sub-directory (default: root)
+        if rel_dir:
+            target_dir = os.path.abspath(os.path.normpath(os.path.join(base, rel_dir)))
+            if not (target_dir == base or target_dir.startswith(base + os.sep)):
+                self._error(400, "Invalid directory path")
+                return
+        else:
+            target_dir = base
+        if not os.path.isdir(target_dir):
+            self._error(404, "Directory not found")
+            return
+        current_rel = os.path.relpath(target_dir, base)
+        if current_rel == ".":
+            current_rel = ""
+        folders = []
         files = []
         try:
-            for root, _, names in os.walk(base, followlinks=True):
-                for name in names:
-                    full = os.path.join(root, name)
-                    if not os.path.isfile(full):
-                        continue
-                    if not _has_supported_media_ext(full):
-                        continue
-                    rel = os.path.relpath(full, base)
-                    files.append({
-                        "name": name,
-                        "path": rel,
-                    })
+            for name in sorted(os.listdir(target_dir), key=str.lower):
+                full = os.path.join(target_dir, name)
+                if os.path.islink(full):
+                    full = os.path.realpath(full)
+                rel = os.path.relpath(os.path.join(target_dir, name), base)
+                if os.path.isdir(full):
+                    folders.append({"name": name, "path": rel.replace(os.sep, "/")})
+                elif os.path.isfile(full) and _has_supported_media_ext(full):
+                    files.append({"name": name, "path": rel.replace(os.sep, "/")})
         except Exception as e:
             self._error(500, f"Failed to scan local media folder: {e}")
             return
-        files.sort(key=lambda x: x["path"].lower())
-        self._json({"base_dir": base, "files": files})
+        self._json({
+            "base_dir": base,
+            "current_dir": current_rel.replace(os.sep, "/"),
+            "folders": folders,
+            "files": files,
+        })
 
     # ── Pluto TV channels ─────────────────────────────────────────────────────
     def _serve_pluto_channels(self, lang: str):
