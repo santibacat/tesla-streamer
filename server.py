@@ -2570,6 +2570,7 @@ WATCH_HTML = """<!DOCTYPE html>
     <img id="mjpeg" alt="Live MJPEG stream">
     <audio id="audio" controls autoplay playsinline></audio>
     <div class="seek-bar">
+      <button class="seek-btn" data-mins="-10">-10 min</button>
       <button class="seek-btn" data-mins="1">+1 min</button>
       <button class="seek-btn" data-mins="5">+5 min</button>
       <button class="seek-btn" data-mins="10">+10 min</button>
@@ -2686,7 +2687,7 @@ WATCH_HTML = """<!DOCTYPE html>
 
     seekTimer = setTimeout(function () {
       clearInterval(countdownInterval);
-      var targetSeek = baseSeekS + pendingOffsetS;
+      var targetSeek = Math.max(0, baseSeekS + pendingOffsetS);
       seekPending.textContent = "Reloading\u2026";
       seekCancel.style.display = "none";
       var watchUrl = "/watch?url=" + encodeURIComponent(videoUrl) + "&seek=" + targetSeek;
@@ -2699,7 +2700,7 @@ WATCH_HTML = """<!DOCTYPE html>
   if (videoUrl) {
     document.querySelectorAll(".seek-btn").forEach(function (btn) {
       btn.addEventListener("click", function () {
-        pendingOffsetS += parseInt(btn.getAttribute("data-mins"), 10) * 60;
+        pendingOffsetS = Math.max(-baseSeekS, pendingOffsetS + parseInt(btn.getAttribute("data-mins"), 10) * 60);
         startSeekTimer();
       });
     });
